@@ -18,7 +18,7 @@ export class Store {
     this.file = file;
     this.saveDelayMs = saveDelayMs;
     this.timer = null;
-    this.data = { players: {}, families: {}, orders: {}, counters: {} };
+    this.data = { players: {}, families: {}, orders: {}, counters: {}, houses: {} };
     if (file && fs.existsSync(file)) {
       try {
         const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -27,6 +27,11 @@ export class Store {
         this.data.orders = parsed.orders ?? {};
         this.data.counters = parsed.counters ?? {};
         this.data.reports = parsed.reports ?? [];
+        this.data.houses = parsed.houses ?? {};
+        for (const f of Object.values(this.data.families)) {
+          f.treasury ??= 0;
+          f.treasuryLog ??= [];
+        }
         this.data.audit = parsed.audit ?? [];
         for (const r of this.data.reports) r.id ??= crypto.randomUUID();
         for (const p of Object.values(this.data.players)) migratePlayer(p);
@@ -118,7 +123,7 @@ export class Store {
 
   createFamily(name, owner) {
     const id = crypto.randomUUID();
-    const family = { id, name, ownerId: owner.id, members: [owner.id], createdAt: Date.now() };
+    const family = { id, name, ownerId: owner.id, members: [owner.id], createdAt: Date.now(), treasury: 0, treasuryLog: [] };
     this.data.families[id] = family;
     owner.familyId = id;
     this.save();
@@ -136,11 +141,34 @@ export class Store {
     player.familyId = null;
     if (family) {
       family.members = family.members.filter((m) => m !== player.id);
-      if (family.members.length === 0) delete this.data.families[family.id];
+      if (family.members.length === 0) {
+        // Famille dissoute : ses maisons sont remises en vente, la cagnotte rendue au dernier membre
+        player.money += family.treasury ?? 0;
+        for (const [key, h] of Object.entries(this.data.houses)) if (h.familyId === family.id) delete this.data.houses[key];
+        delete this.data.families[family.id];
+      }
       else if (family.ownerId === player.id) family.ownerId = family.members[0];
     }
     this.save();
     return family;
+  }
+
+  // --- Maisons -----------------------------------------------------------------------
+  housesOf(familyId) {
+    return Object.entries(this.data.houses)
+      .filter(([, h]) => h.familyId === familyId)
+      .map(([key, h]) => ({ key, country: key.split(':')[0], lot: Number(key.split(':')[1]), ...h }));
+  }
+
+  housesIn(country) {
+    return Object.entries(this.data.houses)
+      .filter(([key]) => key.startsWith(`${country}:`))
+      .map(([key, h]) => ({ lot: Number(key.split(':')[1]), ...h }));
+  }
+
+  /** Mouvement de la cagnotte familiale (30 derniers). */
+  logTreasury(family, delta, label) {
+    family.treasuryLog = [{ at: Date.now(), delta, label }, ...(family.treasuryLog ?? [])].slice(0, 30);
   }
 
   // --- Vida & commandes ----------------------------------------------------------------

@@ -2,6 +2,7 @@
 // Utilisée par le client (rendu 3D) ET le serveur (spawn, missions, validation),
 // ce qui garantit qu'ils partagent exactement la même géographie.
 import { COUNTRY_BY_CODE } from './countries.js';
+import { LOTS, RESIDENTIAL } from './houses.js';
 
 export const WORLD = Object.freeze({
   bound: 420, // zone jouable : |x|,|z| <= bound
@@ -113,6 +114,8 @@ export function onRoad(x, z, margin = 0) {
   }
   // Route d'accès à l'aéroport
   if (Math.abs(z) <= half && x >= 180 && x <= 260) return true;
+  // Avenue du quartier résidentiel
+  if (Math.abs(z) <= half && x >= RESIDENTIAL.fromX && x <= RESIDENTIAL.toX) return true;
   return false;
 }
 
@@ -191,13 +194,19 @@ export function getLayout(code) {
   addBox({ x: t.x, z: t.z, w: t.w, d: t.d, h: t.h, color: '#e2e8f0', kind: 'terminal' });
   // Hangars
   for (const hz of [-110, 110]) addBox({ x: 280, z: hz, w: 26, d: 40, h: 12, color: '#94a3b8', kind: 'hangar' });
+  // Maisons du quartier résidentiel (toujours construites ; à vendre tant qu'aucune famille ne les achète)
+  for (const lot of LOTS) {
+    const h = lot.house;
+    colliders.push({ minX: h.x - h.w / 2, maxX: h.x + h.w / 2, minZ: h.z - h.d / 2, maxZ: h.z + h.d / 2 });
+  }
 
   // Arbres / végétation (hors routes, hors bâtiments, hors aéroport)
   const trees = [];
   const blocked = (x, z, pad) =>
     onRoad(x, z, pad) ||
     colliders.some((c) => x > c.minX - pad && x < c.maxX + pad && z > c.minZ - pad && z < c.maxZ + pad) ||
-    (x > 230 && x < 380 && Math.abs(z) < 330);
+    (x > 230 && x < 380 && Math.abs(z) < 330) ||
+    (x > RESIDENTIAL.fromX - 6 && x < RESIDENTIAL.toX && Math.abs(z) < RESIDENTIAL.roadHalf + RESIDENTIAL.lotD + 4);
   for (const p of parks) {
     const n = 10 + Math.floor(rand() * 8);
     for (let i = 0; i < n; i++) {
@@ -223,6 +232,9 @@ export function getLayout(code) {
       poi.push({ x: l + off, z: v }, { x: v, z: l - off });
     }
   }
+
+  // Livraisons aussi devant les maisons
+  for (const lot of LOTS) poi.push({ x: lot.door.x, z: lot.door.z });
 
   const layout = {
     code,

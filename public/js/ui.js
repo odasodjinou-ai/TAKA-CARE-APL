@@ -9,6 +9,7 @@ import {
 } from '/shared/catalog.js';
 import { VEHICLES, VEHICLE_BY_ID, BRANDS, CATEGORIES } from '/shared/vehicles.js';
 import { createCar, disposeCar } from './vehicles.js';
+import { LOTS, LOT_BY_ID, HOUSE_TIERS, MAX_HOUSES_PER_FAMILY, SELL_REFUND, RESIDENTIAL } from '/shared/houses.js';
 import { ROAD_LINES, WORLD, PLACES } from '/shared/layout.js';
 
 export const $ = (sel) => document.querySelector(sel);
@@ -376,6 +377,7 @@ export const PANELS = {
           ),
         ),
       ),
+      familyTreasury(game, fam),
       h('div', { class: 'region-title' }, 'Joueurs proches à inviter'),
       nearby.length
         ? h('ul', { class: 'list' }, nearby.map((pl) => h('li', {}, pl.name, h('button', { class: 'btn blue', onclick: () => game.net.send('familyInvite', { sid: pl.sid }) }, 'Inviter'))))
@@ -445,7 +447,7 @@ function shopList(game, slots, place) {
 export { ITEMS };
 
 // --- Minicarte -------------------------------------------------------------------
-export function drawMinimap(canvas, { pos, yaw, remotes, mission }) {
+export function drawMinimap(canvas, { pos, yaw, remotes, mission, houses, myFamily }) {
   const ctx = canvas.getContext('2d');
   const S = canvas.width;
   const range = 160; // mètres affichés du centre au bord
@@ -470,7 +472,16 @@ export function drawMinimap(canvas, { pos, yaw, remotes, mission }) {
   }
   ctx.moveTo(tx(180), tz(0));
   ctx.lineTo(tx(260), tz(0));
+  ctx.moveTo(tx(RESIDENTIAL.fromX), tz(0));
+  ctx.lineTo(tx(RESIDENTIAL.toX), tz(0));
   ctx.stroke();
+  // Maisons : vertes = ta famille, grises = vendues, contour = à vendre
+  for (const lot of LOTS) {
+    const o = houses?.get(lot.id);
+    const hs = lot.house;
+    ctx.fillStyle = o ? (o.familyId === myFamily ? '#22c55e' : '#64748b') : '#334155';
+    ctx.fillRect(tx(hs.x - hs.w / 2), tz(hs.z - hs.d / 2), hs.w * k, hs.d * k);
+  }
   ctx.fillStyle = '#334155';
   ctx.fillRect(tx(325), tz(-320), 40 * k, 640 * k); // piste
   for (const p of Object.values(PLACES)) {
@@ -868,4 +879,90 @@ PANELS.admin = (game) => {
             ),
           ),
   );
+};
+
+// --- Cagnotte et maisons familiales -----------------------------------------------------------
+function familyTreasury(game, fam) {
+  const p = game.profile;
+  const chef = fam.ownerId === p.id;
+  const amount = h('input', { type: 'number', min: 1, step: 100, placeholder: 'Montant en Cauris', style: 'width:180px' });
+  const val = () => Number.parseInt(amount.value, 10);
+  return h(
+    'div',
+    {},
+    h('div', { class: 'region-title' }, '🏦 Cagnotte familiale'),
+    h(
+      'div',
+      { class: 'premium-card' },
+      h('p', { style: 'margin-top:0' }, 'Solde : ', h('b', {}, formatMoney(fam.treasury)), ' — sert à acheter les maisons de la famille. Tout le monde peut y déposer ; seul le chef peut acheter ou retirer.'),
+      h(
+        'div',
+        { class: 'row' },
+        amount,
+        h('button', { class: 'btn primary', onclick: () => val() > 0 && game.net.send('familyDeposit', { amount: val() }) }, 'Déposer'),
+        chef ? h('button', { class: 'btn', onclick: () => val() > 0 && game.net.send('familyWithdraw', { amount: val() }) }, 'Retirer') : null,
+      ),
+      fam.treasuryLog?.length ? h('ul', { class: 'meta', style: 'margin:6px 0 0;padding-left:18px' }, fam.treasuryLog.slice(0, 5).map((l) => h('li', {}, `${l.delta > 0 ? '+' : ''}${formatMoney(l.delta)} · ${l.label}`))) : null,
+    ),
+    h('div', { class: 'region-title' }, `🏠 Maisons (${fam.houses.length}/${MAX_HOUSES_PER_FAMILY})`),
+    fam.houses.length
+      ? h(
+          'ul',
+          { class: 'list' },
+          fam.houses.map((x) => {
+            const c = COUNTRY_BY_CODE.get(x.country);
+            const here = x.country === game.country;
+            return h(
+              'li',
+              {},
+              h('div', {}, `${c?.flag ?? ''} `, h('b', {}, `${HOUSE_TIERS[x.tier].name} n°${x.lot}`), h('div', { class: 'meta' }, `${c?.name ?? x.country}${here ? ' · tu es dans ce pays' : ''}`)),
+              here ? h('button', { class: 'btn blue', onclick: () => game.net.send('houseHome') }, '🏠 Rentrer') : h('span', { class: 'meta' }, 'Prends l\'avion pour y aller'),
+            );
+          }),
+        )
+      : h('p', { class: 'muted' }, 'Aucune maison. Va dans le quartier résidentiel (à l\'ouest de la ville) et approche-toi d\'un panneau « À VENDRE ».'),
+  );
+}
+
+PANELS.house = (game) => {
+  const lot = LOT_BY_ID.get(game.houseLot);
+  if (!lot) return h('p', {}, 'Maison inconnue.');
+  const t = HOUSE_TIERS[lot.tier];
+  const owner = game.houses?.get(lot.id) ?? null;
+  const p = game.profile;
+  const fam = p.family;
+  const mine = owner && fam && owner.familyId === fam.id;
+  const chef = fam && fam.ownerId === p.id;
+  const desc = h('p', { class: 'muted' }, `${t.name} · ${t.floors} étage(s)${t.garage ? ' · garage' : ''}${t.pool ? ' · piscine' : ''} · terrain n°${lot.id}`);
+
+  if (mine) {
+    const wall = h('input', { type: 'color', value: owner.wall });
+    const roof = h('input', { type: 'color', value: owner.roof });
+    return h(
+      'div',
+      {},
+      desc,
+      h('p', {}, '✅ Cette maison appartient à ta famille. Les membres y apparaissent en arrivant dans ce pays et peuvent y revenir depuis le panneau Famille.'),
+      h('div', { class: 'row' }, h('label', {}, 'Couleur des murs', wall), h('label', {}, 'Couleur du toit', roof)),
+      h('button', { class: 'btn primary', onclick: () => game.net.send('houseColors', { lot: lot.id, wall: wall.value, roof: roof.value }) }, 'Appliquer les couleurs'),
+      chef
+        ? h('p', {}, h('button', { class: 'btn danger', onclick: () => confirm(`Revendre cette maison ? La cagnotte récupère ${formatMoney(Math.floor(t.price * SELL_REFUND))} (${SELL_REFUND * 100} % du prix).`) && game.net.send('houseSell', { lot: lot.id }) }, 'Revendre la maison'))
+        : null,
+    );
+  }
+  if (owner) return h('div', {}, desc, h('p', {}, `Cette maison appartient à la famille « ${owner.family} ».`));
+
+  // À vendre
+  let action;
+  if (!fam) action = h('p', {}, 'Crée ou rejoins une famille (touche G) pour pouvoir acheter une maison ensemble.');
+  else if (!chef) action = h('p', {}, `Seul le chef de famille peut acheter. Aide-le en déposant des Cauris dans la cagnotte (${formatMoney(fam.treasury)} / ${formatMoney(t.price)}).`);
+  else if (fam.houses.length >= MAX_HOUSES_PER_FAMILY) action = h('p', {}, `Ta famille a déjà ${MAX_HOUSES_PER_FAMILY} maisons (maximum).`);
+  else
+    action = h(
+      'div',
+      {},
+      h('p', {}, 'Cagnotte familiale : ', h('b', {}, formatMoney(fam.treasury)), fam.treasury < t.price ? ` — il manque ${formatMoney(t.price - fam.treasury)}` : ''),
+      h('button', { class: 'btn primary big', disabled: fam.treasury < t.price, onclick: () => confirm(`Acheter cette ${t.name.toLowerCase()} pour ${formatMoney(t.price)} avec la cagnotte familiale ?`) && game.net.send('houseBuy', { lot: lot.id }) }, `Acheter pour ${formatMoney(t.price)}`),
+    );
+  return h('div', {}, desc, h('p', {}, 'Prix : ', h('b', {}, formatMoney(t.price)), ' (payé avec la cagnotte familiale)'), action);
 };

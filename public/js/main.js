@@ -12,6 +12,7 @@ import { createCar, setCarColor, spinWheels, disposeCar, bodySpec } from './vehi
 import { Driving } from './driving.js';
 import { EngineSound } from './audio.js';
 import { VEHICLE_BY_ID } from '/shared/vehicles.js';
+import { LOTS, HOUSE_TIERS } from '/shared/houses.js';
 import { $, h, toast, openPanel, closePanel, refreshPanel, panelOpen, PANELS, drawMinimap, phoneFlow } from './ui.js';
 
 const CREDS_KEY = 'terravida:creds';
@@ -183,6 +184,7 @@ const PANEL_TITLES = {
   help: '❔ Aide',
   vida: '💎 Vida & Premium',
   account: '👤 Mon compte',
+  house: '🏠 Maison',
   admin: '🛡️ Modération',
 };
 
@@ -204,12 +206,25 @@ function nearestPlace() {
     const d = Math.hypot(me.pos.x - p.door.x, me.pos.z - p.door.z);
     if (d <= INTERACT_RADIUS && (!best || d < best.d)) best = { p, d };
   }
+  // Portails des maisons du quartier résidentiel
+  for (const lot of LOTS) {
+    const d = Math.hypot(me.pos.x - lot.door.x, me.pos.z - lot.door.z);
+    if (d <= 3.5 && (!best || d < best.d)) {
+      const owner = game.houses?.get(lot.id);
+      best = { d, p: { id: 'house', lot: lot.id, label: owner ? `Maison de la famille ${owner.family}` : `${HOUSE_TIERS[lot.tier].name} n°${lot.id} — à vendre` } };
+    }
+  }
   return best?.p ?? null;
 }
 
 function interact() {
   const p = nearestPlace();
-  if (p) togglePanel(p.id);
+  if (!p) return;
+  if (p.id === 'house') {
+    game.houseLot = p.lot;
+    return togglePanel('house', `🏠 ${p.label}`);
+  }
+  togglePanel(p.id);
 }
 
 /** Place un personnage sur la selle (moto) ou le rend au monde. */
@@ -579,7 +594,7 @@ function frame() {
     if (hudTimer <= 0) {
       hudTimer = 0.25;
       updateHud();
-      drawMinimap($('#minimap'), { pos: me.pos, yaw: me.yaw, remotes: [...game.remotes.values()].map((r) => r.pos), mission: game.mission?.target });
+      drawMinimap($('#minimap'), { pos: me.pos, yaw: me.yaw, remotes: [...game.remotes.values()].map((r) => r.pos), mission: game.mission?.target, houses: game.houses, myFamily: game.profile.family?.id });
     }
   } else {
     // Écran d'accueil : vue aérienne tournante si un monde est chargé
@@ -948,6 +963,22 @@ net.on('banned', (m) => {
   showScreen('login');
   $('#login-status').textContent = `⛔ Ce compte est banni ${m.until ? `jusqu'au ${new Date(m.until).toLocaleString('fr-FR')}` : 'définitivement'}. Motif : ${m.reason}`;
 });
+// Maisons
+net.on('houses', (m) => {
+  if (m.country !== game.country && m.country !== world.code) return;
+  game.houses = new Map(m.houses.map((x) => [x.lot, x]));
+  world.updateHouses(m.houses);
+  if (panelOpen() === 'house' || panelOpen() === 'family') refreshPanel();
+});
+net.on('teleport', (m) => {
+  if (me.inCar) toggleCar();
+  me.pos.set(m.x, 0, m.z);
+  me.yaw = m.ry;
+  cam.yaw = m.ry + Math.PI;
+  camera.position.set(m.x, 8, m.z + 10);
+  closePanel();
+  toast('🏠 Bienvenue à la maison !', 'success');
+});
 net.on('toast', (m) => toast(m.message, m.kind));
 net.on('error', (m) => {
   toast(m.message, 'error');
@@ -971,7 +1002,7 @@ net.on('kicked', (m) => {
 
 // Outils de test automatisé (uniquement avec ?debug dans l'URL)
 if (new URLSearchParams(location.search).has('debug')) {
-  window.__terra = { game, me, world, scene, camera };
+  window.__terra = { game, me, world, scene, camera, cam };
   const hour = new URLSearchParams(location.search).get('hour');
   if (hour) World.hourOverride = Number(hour);
 }

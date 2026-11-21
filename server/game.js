@@ -24,6 +24,7 @@ import { normalizePhone, maskPhone } from './auth/otp.js';
 import { moderate, isOffensiveName, addStrike, mutedUntil, SANCTIONS } from './moderation.js';
 import crypto from 'node:crypto';
 import { ADMIN_HANDLERS, AdminMixin, parseAdminPhones, isBanned } from './admin.js';
+import { HOUSE_TIERS, LOT_BY_ID, MAX_HOUSES_PER_FAMILY, SELL_REFUND, HOME_COOLDOWN_MS, DEFAULT_HOUSE_COLORS, houseKey } from '../shared/houses.js';
 
 export const ROOMS = [
   { id: 'afrique-1', name: 'Afrique #1', max: 40 },
@@ -227,6 +228,9 @@ export class Game {
       id: fam.id,
       name: fam.name,
       ownerId: fam.ownerId,
+      treasury: fam.treasury ?? 0,
+      treasuryLog: (fam.treasuryLog ?? []).slice(0, 15),
+      houses: this.store.housesOf(fam.id).map((h) => ({ country: h.country, lot: h.lot, tier: LOT_BY_ID.get(h.lot)?.tier })),
       members: fam.members.map((id) => ({ id, name: this.store.getPlayer(id)?.name ?? '?', online: online.has(id) })),
     };
   }
@@ -275,7 +279,8 @@ export class Game {
   enterZone(client, country, at) {
     client.zone = country;
     const layout = getLayout(country);
-    const spawn = at ?? layout.spawn;
+    const home = at ? null : this.homeLot(client.profile, country);
+    const spawn = at ?? (home ? { x: home.door.x, z: home.door.z - home.side * 3 } : layout.spawn);
     client.pos = { x: spawn.x, y: 0, z: spawn.z, ry: 0 };
     client.lastStateAt = this.now();
     client.veh = null;
@@ -285,6 +290,33 @@ export class Game {
       players: this.zonePeers(client).map((c) => this.publicInfo(c)),
     });
     this.broadcastZone(client, 'pjoin', { p: this.publicInfo(client) });
+    this.send(client, 'houses', { country, houses: this.housesView(country) });
+  }
+
+  // --- Maisons ---------------------------------------------------------------------
+  housesView(country) {
+    return this.store.housesIn(country).map((h) => ({ lot: h.lot, family: this.store.getFamily(h.familyId)?.name ?? '?', familyId: h.familyId, wall: h.wall, roof: h.roof }));
+  }
+
+  /** Terrain de la maison familiale du joueur dans ce pays (ou null). */
+  homeLot(profile, country) {
+    if (!profile?.familyId) return null;
+    const h = this.store.housesOf(profile.familyId).find((x) => x.country === country);
+    return h ? LOT_BY_ID.get(h.lot) : null;
+  }
+
+  /** Prévient tous les joueurs présents dans ce pays (tous serveurs confondus). */
+  broadcastHouses(country) {
+    const houses = this.housesView(country);
+    for (const c of this.clients) if (c.zone === country) this.send(c, 'houses', { country, houses });
+  }
+
+  /** Met à jour le profil de tous les membres connectés (cagnotte, maisons). */
+  refreshFamily(fam) {
+    for (const id of fam.members) {
+      const c = this.findOnline(id);
+      if (c) this.sendProfile(c);
+    }
   }
 
   leaveZone(client) {
@@ -719,6 +751,98 @@ const HANDLERS = {
       const c = this.findOnline(id);
       if (c) this.sendProfile(c);
     }
+  },
+
+  // --- Cagnotte familiale et maisons ---------------------------------------------------
+  familyDeposit(client, { amount }) {
+    const p = client.profile;
+    const fam = this.store.getFamily(p.familyId);
+    if (!fam) return this.error(client, 'Tu n\'as pas de famille.');
+    if (!Number.isInteger(amount) || amount < 1 || amount > 10_000_000) return this.error(client, 'Montant invalide.');
+    if (p.money < amount) return this.error(client, 'Pas assez de Cauris.');
+    p.money -= amount;
+    fam.treasury += amount;
+    this.store.logTreasury(fam, amount, `Dépôt de ${p.name}`);
+    this.store.save();
+    this.refreshFamily(fam);
+    this.toast(client, `🏦 ${formatMoney(amount)} déposés dans la cagnotte familiale.`, 'success');
+  },
+
+  familyWithdraw(client, { amount }) {
+    const p = client.profile;
+    const fam = this.store.getFamily(p.familyId);
+    if (!fam || fam.ownerId !== p.id) return this.error(client, 'Seul le chef de famille peut retirer de la cagnotte.');
+    if (!Number.isInteger(amount) || amount < 1 || amount > fam.treasury) return this.error(client, 'Montant invalide.');
+    fam.treasury -= amount;
+    p.money += amount;
+    this.store.logTreasury(fam, -amount, `Retrait par ${p.name}`);
+    this.store.save();
+    this.refreshFamily(fam);
+  },
+
+  houseBuy(client, { lot: lotId }) {
+    const p = client.profile;
+    const lot = LOT_BY_ID.get(lotId);
+    const fam = this.store.getFamily(p.familyId);
+    if (!lot || !client.zone) return this.error(client, 'Terrain inconnu.');
+    if (!fam) return this.error(client, 'Il faut une famille pour acheter une maison.');
+    if (fam.ownerId !== p.id) return this.error(client, 'Seul le chef de famille peut acheter une maison.');
+    if (distance2D(client.pos, lot.door) > INTERACT_RADIUS + 2) return this.error(client, 'Approche-toi du portail de la maison.');
+    const key = houseKey(client.zone, lot.id);
+    if (this.store.data.houses[key]) return this.error(client, 'Cette maison est déjà vendue.');
+    if (this.store.housesOf(fam.id).length >= MAX_HOUSES_PER_FAMILY) return this.error(client, `Une famille peut avoir au plus ${MAX_HOUSES_PER_FAMILY} maisons.`);
+    const price = HOUSE_TIERS[lot.tier].price;
+    if (fam.treasury < price) return this.error(client, `Il manque ${formatMoney(price - fam.treasury)} dans la cagnotte familiale.`);
+    fam.treasury -= price;
+    this.store.logTreasury(fam, -price, `Achat : ${HOUSE_TIERS[lot.tier].name} n°${lot.id} (${client.zone})`);
+    this.store.data.houses[key] = { familyId: fam.id, boughtAt: this.now(), price, ...DEFAULT_HOUSE_COLORS };
+    this.store.save();
+    this.broadcastHouses(client.zone);
+    this.refreshFamily(fam);
+    for (const id of fam.members) {
+      const c = this.findOnline(id);
+      if (c) this.toast(c, `🏠 La famille « ${fam.name} » a acheté une ${HOUSE_TIERS[lot.tier].name.toLowerCase()} !`, 'success');
+    }
+  },
+
+  houseSell(client, { lot: lotId }) {
+    const p = client.profile;
+    const fam = this.store.getFamily(p.familyId);
+    const key = houseKey(client.zone, lotId);
+    const h = this.store.data.houses[key];
+    if (!fam || !h || h.familyId !== fam.id) return this.error(client, 'Cette maison n\'est pas à ta famille.');
+    if (fam.ownerId !== p.id) return this.error(client, 'Seul le chef de famille peut vendre.');
+    const refund = Math.floor(h.price * SELL_REFUND);
+    delete this.store.data.houses[key];
+    fam.treasury += refund;
+    this.store.logTreasury(fam, refund, `Vente de la maison n°${lotId} (${client.zone})`);
+    this.store.save();
+    this.broadcastHouses(client.zone);
+    this.refreshFamily(fam);
+    this.toast(client, `Maison vendue : +${formatMoney(refund)} dans la cagnotte.`, 'success');
+  },
+
+  houseColors(client, { lot: lotId, wall, roof }) {
+    const p = client.profile;
+    const h = this.store.data.houses[houseKey(client.zone, lotId)];
+    if (!h || h.familyId !== p.familyId) return this.error(client, 'Cette maison n\'est pas à ta famille.');
+    if (![wall, roof].every((c) => typeof c === 'string' && /^#[0-9a-fA-F]{6}$/.test(c))) return this.error(client, 'Couleur invalide.');
+    h.wall = wall.toLowerCase();
+    h.roof = roof.toLowerCase();
+    this.store.save();
+    this.broadcastHouses(client.zone);
+  },
+
+  houseHome(client) {
+    const lot = this.homeLot(client.profile, client.zone);
+    if (!lot) return this.error(client, 'Ta famille n\'a pas de maison dans ce pays.');
+    const now = this.now();
+    if (now - (client.lastHomeAt ?? 0) < HOME_COOLDOWN_MS) return this.error(client, 'Patiente un peu avant de rentrer à nouveau.');
+    client.lastHomeAt = now;
+    client.veh = null;
+    client.pos = { x: lot.door.x, y: 0, z: lot.door.z - lot.side * 3, ry: lot.side > 0 ? 0 : Math.PI };
+    client.lastStateAt = now;
+    this.send(client, 'teleport', { x: client.pos.x, z: client.pos.z, ry: client.pos.ry });
   },
 
   familyGift(client, { to, amount }) {

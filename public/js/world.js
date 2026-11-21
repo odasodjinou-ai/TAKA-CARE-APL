@@ -7,6 +7,8 @@ import { getLayout, makeHeightFn, ROAD_LINES, WORLD, PLACES, AIRPORT, mulberry32
 import { COUNTRY_BY_CODE } from '/shared/countries.js';
 import { createCar, createPlane, spinWheels, disposeCar, setLights } from './vehicles.js';
 import { VEHICLES } from '/shared/vehicles.js';
+import { LOTS, HOUSE_TIERS, RESIDENTIAL, DEFAULT_HOUSE_COLORS } from '/shared/houses.js';
+import { formatMoney } from '/shared/catalog.js';
 
 const DAY_SECONDS = 24 * 60; // une journée = 24 minutes réelles
 
@@ -124,7 +126,7 @@ function facadeTextures(seed, style) {
   return { map: draw(false), emissive: draw(true) };
 }
 
-function signTexture(text, color) {
+function signTexture(text, color, size = 72) {
   const c = document.createElement('canvas');
   c.width = 512;
   c.height = 128;
@@ -132,7 +134,7 @@ function signTexture(text, color) {
   ctx.fillStyle = color;
   ctx.fillRect(0, 0, 512, 128);
   ctx.fillStyle = '#fff';
-  ctx.font = 'bold 72px system-ui, sans-serif';
+  ctx.font = `bold ${size}px system-ui, sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText(text, 256, 68);
@@ -352,6 +354,12 @@ export class World {
       strip(0, l, WORLD.roadWidth, span, true, roadMat, 0.065, 14);
     }
     strip(220, 0, WORLD.roadWidth, 80, true, roadMat, 0.06, 14);
+    // Avenue du quartier résidentiel
+    const avLen = RESIDENTIAL.toX - RESIDENTIAL.fromX;
+    const avX = (RESIDENTIAL.toX + RESIDENTIAL.fromX) / 2;
+    strip(avX, 0, WORLD.roadWidth + WORLD.sidewalk * 2, avLen, true, walkMat, 0.03, 4);
+    strip(avX, 0, WORLD.roadWidth, avLen, true, roadMat, 0.06, 14);
+    this.buildHouses(add, layout.biome);
 
     // --- Aéroport ---
     const concMat = new THREE.MeshStandardMaterial({ map: tex.concrete.clone(), roughness: 0.9 });
@@ -530,6 +538,123 @@ export class World {
     }
 
     this.updateEnvironment(true);
+  }
+
+  /** Construit les 14 maisons du quartier (une fois par pays). */
+  buildHouses(add, biome) {
+    this.houses = new Map();
+    const lawn = new THREE.MeshStandardMaterial({ color: biome === 'desert' ? '#b9a66a' : biome === 'snow' ? '#e2e8f0' : '#5e9a3c', roughness: 1 });
+    const hedge = new THREE.MeshStandardMaterial({ color: '#2f6b2a', roughness: 0.95 });
+    const paving = new THREE.MeshStandardMaterial({ color: '#cbd5e1', roughness: 0.8 });
+    const wood = new THREE.MeshStandardMaterial({ color: '#6b3f1f', roughness: 0.7 });
+    const glass = new THREE.MeshPhysicalMaterial({ color: '#1e3a5f', roughness: 0.05, metalness: 0.4, clearcoat: 1 });
+    const white = new THREE.MeshStandardMaterial({ color: '#f8fafc', roughness: 0.6 });
+    const water = new THREE.MeshPhysicalMaterial({ color: '#22b8e6', roughness: 0.05, clearcoat: 1, transparent: true, opacity: 0.9 });
+    const mesh = (geo, mat, x, y, z, group) => {
+      const m = new THREE.Mesh(geo, mat);
+      m.position.set(x, y, z);
+      m.castShadow = true;
+      m.receiveShadow = true;
+      group.add(m);
+      return m;
+    };
+    for (const lot of LOTS) {
+      const t = HOUSE_TIERS[lot.tier];
+      const g = new THREE.Group();
+      const f = -lot.side; // direction de la façade (vers l'avenue)
+      // Terrain : pelouse, haie (ouverte devant), allée
+      mesh(new THREE.BoxGeometry(RESIDENTIAL.lotW - 1, 0.04, RESIDENTIAL.lotD), lawn, lot.x, 0.02, lot.z, g).castShadow = false;
+      const back = lot.z + lot.side * (RESIDENTIAL.lotD / 2);
+      mesh(new THREE.BoxGeometry(RESIDENTIAL.lotW - 1, 0.9, 0.5), hedge, lot.x, 0.45, back, g);
+      for (const sx of [-1, 1]) {
+        mesh(new THREE.BoxGeometry(0.5, 0.9, RESIDENTIAL.lotD), hedge, lot.x + sx * (RESIDENTIAL.lotW / 2 - 0.75), 0.45, lot.z, g);
+        mesh(new THREE.BoxGeometry(9, 0.9, 0.5), hedge, lot.x + sx * 7.5, 0.45, lot.door.z + lot.side * 0.3, g);
+      }
+      const h = lot.house;
+      const pathLen = Math.abs(h.z - f * (h.d / 2) - lot.door.z);
+      mesh(new THREE.BoxGeometry(2.2, 0.05, pathLen), paving, lot.x, 0.05, (h.z - f * (h.d / 2) + lot.door.z) / 2, g).castShadow = false;
+
+      // Maison
+      const wallMat = new THREE.MeshStandardMaterial({ color: DEFAULT_HOUSE_COLORS.wall, roughness: 0.85 });
+      const roofMat = new THREE.MeshStandardMaterial({ color: DEFAULT_HOUSE_COLORS.roof, roughness: 0.7 });
+      const floorH = t.floors === 2 ? 3.2 : 3.4;
+      const bodyH = floorH * t.floors;
+      const frontZ = h.z + f * (h.d / 2);
+      mesh(new THREE.BoxGeometry(h.w, bodyH, h.d), wallMat, h.x, bodyH / 2, h.z, g);
+      if (lot.tier === 'luxe') {
+        // Moderne : toit plat débordant, grandes baies vitrées
+        mesh(new THREE.BoxGeometry(h.w + 1.6, 0.35, h.d + 1.6), roofMat, h.x, bodyH + 0.17, h.z, g);
+        mesh(new THREE.BoxGeometry(h.w * 0.62, bodyH * 0.8, 0.12), glass, h.x + h.w * 0.12, bodyH * 0.45, frontZ + f * 0.06, g);
+      } else {
+        // Toit à deux pans (prisme)
+        const roofH = t.floors === 2 ? 2.6 : 2.3;
+        const shape = new THREE.Shape([new THREE.Vector2(-h.w / 2 - 0.5, 0), new THREE.Vector2(h.w / 2 + 0.5, 0), new THREE.Vector2(0, roofH)]);
+        const roofGeo = new THREE.ExtrudeGeometry(shape, { depth: h.d + 0.8, bevelEnabled: false }).translate(0, 0, -(h.d + 0.8) / 2);
+        mesh(roofGeo, roofMat, h.x, bodyH, h.z, g);
+        mesh(new THREE.BoxGeometry(0.7, 1.6, 0.7), roofMat, h.x + h.w * 0.25, bodyH + 1.4, h.z, g); // cheminée
+        for (let fl = 0; fl < t.floors; fl++) {
+          for (const wx of [-h.w * 0.3, h.w * 0.3]) {
+            if (fl === 0 && Math.abs(wx) < 1) continue;
+            mesh(new THREE.BoxGeometry(1.4, 1.3, 0.12), glass, h.x + wx, fl * floorH + 1.8, frontZ + f * 0.06, g);
+            mesh(new THREE.BoxGeometry(1.6, 0.12, 0.25), white, h.x + wx, fl * floorH + 1.08, frontZ + f * 0.1, g);
+          }
+        }
+        if (t.floors === 2) mesh(new THREE.BoxGeometry(h.w * 0.5, 0.15, 1.4), white, h.x, floorH, frontZ + f * 0.7, g); // balcon
+      }
+      // Fenêtres latérales
+      for (const sx of [-1, 1]) mesh(new THREE.BoxGeometry(0.12, 1.3, 1.6), glass, h.x + sx * (h.w / 2 + 0.06), 1.8, h.z, g);
+      // Porte
+      mesh(new THREE.BoxGeometry(1.2, 2.2, 0.15), wood, h.x, 1.1, frontZ + f * 0.08, g);
+      mesh(new THREE.BoxGeometry(2.4, 0.3, 1.2), white, h.x, 0.15, frontZ + f * 0.6, g).castShadow = false; // perron
+      // Garage
+      if (t.garage) {
+        const gx = h.x - h.w / 2 - 2.6;
+        mesh(new THREE.BoxGeometry(5, 3, h.d * 0.7), wallMat, gx, 1.5, h.z + f * (h.d * 0.15), g);
+        mesh(new THREE.BoxGeometry(3.6, 2.4, 0.12), white, gx, 1.2, h.z + f * (h.d * 0.15 + h.d * 0.35 + 0.06), g);
+        mesh(new THREE.BoxGeometry(5.4, 0.25, h.d * 0.7 + 0.4), roofMat, gx, 3.1, h.z + f * (h.d * 0.15), g);
+      }
+      // Piscine
+      if (t.pool) {
+        const pz = (frontZ + lot.door.z) / 2 + lot.side * 0.5;
+        mesh(new THREE.BoxGeometry(8.4, 0.3, 4.4), white, lot.x + 5, 0.15, pz, g).castShadow = false;
+        mesh(new THREE.BoxGeometry(7.6, 0.05, 3.6), water, lot.x + 5, 0.31, pz, g).castShadow = false;
+      }
+      // Boîte aux lettres + plaque / panneau « À vendre »
+      const post = new THREE.Group();
+      post.position.set(lot.x - 3.2, 0, lot.door.z + lot.side * 0.8);
+      mesh(new THREE.BoxGeometry(0.12, 1.4, 0.12), wood, 0, 0.7, 0, post);
+      const signMat = new THREE.MeshBasicMaterial();
+      // Deux faces dos à dos : le texte se lit dans les deux sens (pas d'effet miroir)
+      for (const back of [0, Math.PI]) {
+        const sign = mesh(new THREE.PlaneGeometry(2.6, 0.9), signMat, 0, 1.8, 0, post);
+        sign.rotation.y = back;
+        sign.position.z = back ? -0.01 : 0.01;
+      }
+      g.add(post);
+      add(g);
+      this.houses.set(lot.id, { lot, wallMat, roofMat, signMat, owned: null });
+    }
+    this.updateHouses([]);
+  }
+
+  /** Applique l'état des ventes : couleurs et plaques des maisons. */
+  updateHouses(list) {
+    if (!this.houses) return;
+    const byLot = new Map(list.map((h) => [h.lot, h]));
+    for (const [id, hs] of this.houses) {
+      const o = byLot.get(id) ?? null;
+      const key = o ? `${o.family}|${o.wall}|${o.roof}` : 'libre';
+      if (hs.key === key) continue;
+      hs.key = key;
+      hs.owned = o;
+      hs.wallMat.color.set(o?.wall ?? DEFAULT_HOUSE_COLORS.wall);
+      hs.roofMat.color.set(o?.roof ?? DEFAULT_HOUSE_COLORS.roof);
+      hs.signMat.map?.dispose();
+      hs.signMat.map = o
+        ? signTexture(`Famille ${o.family}`.slice(0, 22), '#14532d', 40)
+        : signTexture(`À VENDRE · ${formatMoney(HOUSE_TIERS[hs.lot.tier].price)}`, '#b91c1c', 36);
+      hs.signMat.needsUpdate = true;
+    }
   }
 
   addSign(mesh, place, b, front) {

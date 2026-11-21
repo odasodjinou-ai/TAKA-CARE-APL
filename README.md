@@ -28,6 +28,7 @@ Variables : `PORT` (défaut 3000), `DATA_FILE` (défaut `data/db.json`).
 | Métiers | Livreur, Chauffeur de taxi (voiture obligatoire), Ambulancier, Policier — missions enchaînées, payées par le serveur |
 | Skins | Teint, cheveux, haut, pantalon, chapeau (couleurs libres) ; boutique de vêtements (casquette, cowboy, boubou, costume, couronne…) |
 | Véhicules | 45 modèles de 11 marques fictives (Japon, Corée, Allemagne, France, Italie, R.-U., USA, Chine, Suède, Bénin, Norvège) : citadines, berlines, breaks, SUV, pick-up, sportives, supercars, minibus (gbaka), camion, bus, motos (zémidjan). Carrosserie profilée, vitrage, optiques, jantes à rayons, phares la nuit, boîte auto, frein à main/dérapage, roulis, son moteur synthétisé, compteur |
+| Maisons familiales | Quartier résidentiel dans chaque pays (avenue à l'ouest de la ville) : 14 terrains — Maison 15 000 🐚, Villa avec garage 40 000 🐚, Villa de luxe avec piscine 120 000 🐚. Achat par le chef avec la **cagnotte familiale** (alimentée par tous les membres), 2 maisons max par famille, revente à 60 %. Plaque au nom de la famille, couleurs des murs et du toit au choix, apparition à la maison et bouton « 🏠 Rentrer » |
 | Monnaies | **Cauris 🐚** (argent du jeu, gagné par les métiers) et **Vida Ʋ** (monnaie de l'application, achetée en argent réel) |
 | Paiements | MTN MoMo, Moov Money, Celtiis Cash, Wave, Orange Money, PayPal/carte ; reçu numéroté imprimable pour chaque paiement, historique |
 | Premium ⭐ | 3 mois : 1 000 FCFA (100 Ʋ) la 1re fois, 1 600 FCFA (160 Ʋ) ensuite ; badge doré, +50 % de salaire, −30 % sur les vols, véhicules exclusifs |
@@ -133,7 +134,7 @@ server/   index.js (HTTP + WebSocket + routes /pay et /receipt) · game.js (règ
 server/moderation.js   filtre d'insultes, sanctions · admin.js (écran de modération)
 server/auth/   otp.js (codes à usage unique) · sms.js (Africa's Talking, Twilio, mode dev)
 server/payments/   providers.js (FedaPay, Wave, CinetPay, PayPal, simulation) · service.js (commandes) · pages.js (reçus)
-shared/   countries.js · layout.js (carte déterministe) · catalog.js (économie) · vehicles.js (catalogue)
+shared/   countries.js · layout.js (carte déterministe) · houses.js (terrains et maisons) · catalog.js (économie) · vehicles.js (catalogue)
 public/   index.html · css/ · js/ (main, world, character, vehicles, driving, audio, ui, net)
 ```
 
