@@ -10,6 +10,7 @@ import { STARTING_MONEY, DEFAULT_OWNED, DEFAULT_SKIN, ITEMS } from '../shared/ca
 const LEGACY_CARS = { citadine: 'sakura-kora', pickup: 'savane-baobab', suv: 'dragonfly-mountain', sport: 'hanbit-strike' };
 
 const hashToken = (token) => crypto.createHash('sha256').update(token).digest('hex');
+const MAX_DEVICES = 5; // nombre d'appareils connectés simultanément à un même compte
 
 export class Store {
   /** @param {string|null} file chemin du fichier JSON, ou null pour un stockage en mémoire (tests) */
@@ -35,13 +36,14 @@ export class Store {
     }
   }
 
-  createPlayer(name, home) {
+  createPlayer(name, home, phone = null) {
     const id = crypto.randomUUID();
     const token = crypto.randomBytes(32).toString('hex');
     const player = {
       id,
       name,
-      tokenHash: hashToken(token),
+      phone, // numéro vérifié par SMS (E.164) ou null pour un compte invité
+      tokenHashes: [hashToken(token)], // un jeton par appareil
       money: STARTING_MONEY, // Cauris (argent du jeu)
       vida: 0, // Vida (monnaie de l'application, achetée en argent réel)
       vidaLog: [],
@@ -63,9 +65,38 @@ export class Store {
     if (typeof id !== 'string' || typeof token !== 'string') return null;
     const p = this.data.players[id];
     if (!p) return null;
-    const a = Buffer.from(p.tokenHash, 'hex');
     const b = Buffer.from(hashToken(token), 'hex');
-    return a.length === b.length && crypto.timingSafeEqual(a, b) ? p : null;
+    const ok = p.tokenHashes.some((h) => {
+      const a = Buffer.from(h, 'hex');
+      return a.length === b.length && crypto.timingSafeEqual(a, b);
+    });
+    return ok ? p : null;
+  }
+
+  /** Nouveau jeton pour un appareil (les plus anciens sont révoqués au-delà de MAX_DEVICES). */
+  addToken(player) {
+    const token = crypto.randomBytes(32).toString('hex');
+    player.tokenHashes = [...player.tokenHashes, hashToken(token)].slice(-MAX_DEVICES);
+    this.save();
+    return token;
+  }
+
+  removeToken(player, token) {
+    if (typeof token !== 'string') return;
+    const h = hashToken(token);
+    player.tokenHashes = player.tokenHashes.filter((x) => x !== h);
+    this.save();
+  }
+
+  /** Déconnecte tous les appareils sauf celui qui fait la demande. */
+  keepOnlyToken(player, token) {
+    const h = hashToken(token ?? '');
+    player.tokenHashes = player.tokenHashes.filter((x) => x === h);
+    this.save();
+  }
+
+  findByPhone(phone) {
+    return phone ? Object.values(this.data.players).find((p) => p.phone === phone) ?? null : null;
   }
 
   getPlayer(id) {
@@ -165,6 +196,12 @@ export class Store {
 
 /** Met à niveau un profil créé par une ancienne version. */
 function migratePlayer(p) {
+  if (p.tokenHash) {
+    p.tokenHashes = [p.tokenHash];
+    delete p.tokenHash;
+  }
+  p.tokenHashes ??= [];
+  p.phone ??= null;
   p.vida ??= 0;
   p.vidaLog ??= [];
   p.premium ??= { until: 0, firstDone: false };

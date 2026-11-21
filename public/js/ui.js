@@ -590,3 +590,136 @@ function carPreview(model, color) {
   }
   return preview.canvas;
 }
+
+// --- Connexion par téléphone (code SMS) ---------------------------------------------------
+// Indicatifs les plus courants ; « Autre » permet de taper n'importe quel indicatif (+xxx…).
+export const CALLING_CODES = [
+  ['+229', '🇧🇯 Bénin'], ['+228', '🇹🇬 Togo'], ['+225', '🇨🇮 Côte d\'Ivoire'], ['+221', '🇸🇳 Sénégal'], ['+226', '🇧🇫 Burkina Faso'],
+  ['+223', '🇲🇱 Mali'], ['+227', '🇳🇪 Niger'], ['+224', '🇬🇳 Guinée'], ['+237', '🇨🇲 Cameroun'], ['+241', '🇬🇦 Gabon'],
+  ['+242', '🇨🇬 Congo'], ['+243', '🇨🇩 RD Congo'], ['+235', '🇹🇩 Tchad'], ['+236', '🇨🇫 Centrafrique'], ['+222', '🇲🇷 Mauritanie'],
+  ['+261', '🇲🇬 Madagascar'], ['+250', '🇷🇼 Rwanda'], ['+257', '🇧🇮 Burundi'], ['+253', '🇩🇯 Djibouti'], ['+269', '🇰🇲 Comores'],
+  ['+234', '🇳🇬 Nigeria'], ['+233', '🇬🇭 Ghana'], ['+254', '🇰🇪 Kenya'], ['+27', '🇿🇦 Afrique du Sud'], ['+212', '🇲🇦 Maroc'],
+  ['+213', '🇩🇿 Algérie'], ['+216', '🇹🇳 Tunisie'], ['+20', '🇪🇬 Égypte'], ['+509', '🇭🇹 Haïti'], ['+33', '🇫🇷 France'],
+  ['+32', '🇧🇪 Belgique'], ['+41', '🇨🇭 Suisse'], ['+49', '🇩🇪 Allemagne'], ['+39', '🇮🇹 Italie'], ['+34', '🇪🇸 Espagne'],
+  ['+351', '🇵🇹 Portugal'], ['+44', '🇬🇧 Royaume-Uni'], ['+1', '🇺🇸 🇨🇦 États-Unis / Canada'], ['+55', '🇧🇷 Brésil'], ['+86', '🇨🇳 Chine'],
+  ['+91', '🇮🇳 Inde'], ['', '🌐 Autre (tape +indicatif)'],
+];
+// Pays où le 0 initial fait partie du numéro national (numérotation à 10 chiffres)
+const KEEP_ZERO = new Set(['+229', '+225']);
+
+export function buildPhone(cc, num) {
+  const n = String(num).replace(/[\s.\-()]/g, '');
+  if (n.startsWith('+') || n.startsWith('00') || !cc) return n.startsWith('00') ? `+${n.slice(2)}` : n;
+  return cc + (KEEP_ZERO.has(cc) ? n : n.replace(/^0/, ''));
+}
+
+/**
+ * Formulaire en 3 étapes : numéro -> code -> (nouveau compte) pseudo et pays.
+ * @param {'login'|'link'} mode
+ */
+export function phoneFlow(game, mode) {
+  const f = (game.phone ??= { step: 'phone', cc: '+229', num: '', phone: null, masked: null, until: 0, dev: null, ticket: null, busy: false });
+  const busyBtn = (label, onclick, cls = 'btn primary big') => h('button', { class: cls, type: 'button', disabled: f.busy, onclick }, f.busy ? 'Patiente…' : label);
+  if (game.smsAvailable === false) return h('p', { class: 'muted' }, 'La connexion par SMS n\'est pas encore activée sur ce serveur.');
+
+  if (f.step === 'phone') {
+    const num = h('input', { class: 'phone-num', type: 'tel', inputmode: 'tel', autocomplete: 'tel-national', placeholder: f.cc === '+229' ? '01 23 45 67 89' : 'Ton numéro', value: f.num, oninput: (e) => (f.num = e.target.value) });
+    const send = () => {
+      f.phone = buildPhone(f.cc, f.num);
+      f.busy = true;
+      game.net.send('otpRequest', { phone: f.phone });
+      game.rerenderPhone();
+    };
+    num.addEventListener('keydown', (e) => e.key === 'Enter' && (e.preventDefault(), send()));
+    return h(
+      'div',
+      {},
+      h('label', {}, mode === 'link' ? 'Ton numéro de téléphone' : 'Numéro de téléphone'),
+      h('div', { class: 'row nowrap' }, h('select', { class: 'phone-cc', style: 'width:42%', onchange: (e) => ((f.cc = e.target.value), game.rerenderPhone()) }, CALLING_CODES.map(([c, label]) => h('option', { value: c, selected: c === f.cc }, `${label} ${c}`))), num),
+      busyBtn('Recevoir le code par SMS', send),
+      h('p', { class: 'muted' }, 'Un SMS avec un code à 6 chiffres va t\'être envoyé. Ton numéro reste privé : il n\'est jamais montré aux autres joueurs.'),
+    );
+  }
+
+  if (f.step === 'code') {
+    const code = h('input', { class: 'otp-code', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: 6, placeholder: '••••••', style: 'font-size:1.6rem;letter-spacing:0.4em;text-align:center' });
+    const verify = () => {
+      f.busy = true;
+      game.net.send('otpVerify', { phone: f.phone, code: code.value.replace(/\D/g, '') });
+      game.rerenderPhone();
+    };
+    code.addEventListener('input', () => code.value.replace(/\D/g, '').length === 6 && verify()); // validation auto
+    code.addEventListener('keydown', (e) => e.key === 'Enter' && (e.preventDefault(), verify()));
+    setTimeout(() => code.focus(), 0);
+    const left = Math.max(0, Math.ceil((f.until - Date.now()) / 1000));
+    const resend = h('button', { class: 'btn ghost', type: 'button', disabled: left > 0, onclick: () => game.net.send('otpRequest', { phone: f.phone }) }, left > 0 ? `Renvoyer le code (${left} s)` : 'Renvoyer le code');
+    if (left > 0) {
+      const t = setInterval(() => {
+        const l = Math.max(0, Math.ceil((f.until - Date.now()) / 1000));
+        if (!resend.isConnected) return clearInterval(t);
+        resend.textContent = l > 0 ? `Renvoyer le code (${l} s)` : 'Renvoyer le code';
+        resend.disabled = l > 0;
+        if (l === 0) clearInterval(t);
+      }, 1000);
+    }
+    return h(
+      'div',
+      {},
+      h('p', {}, 'Code envoyé au ', h('b', {}, f.masked ?? f.phone)),
+      f.dev ? h('p', { class: 'muted' }, `🧪 Mode développement — code : ${f.dev}`) : null,
+      code,
+      busyBtn('Valider', verify),
+      h('div', { class: 'row' }, resend, h('button', { class: 'btn ghost', type: 'button', onclick: () => ((f.step = 'phone'), game.rerenderPhone()) }, 'Changer de numéro')),
+    );
+  }
+
+  // Nouveau compte : pseudo + pays
+  const name = h('input', { class: 'phone-name', maxlength: 16, placeholder: 'Ton pseudo' });
+  const home = h('select', { class: 'phone-home' }, COUNTRIES.map((c) => h('option', { value: c.code, selected: c.code === (game.guessCountry ?? 'BJ') }, `${c.flag} ${c.name}`)));
+  return h(
+    'div',
+    {},
+    h('p', {}, '✅ Numéro vérifié ! Crée ton personnage :'),
+    h('label', {}, 'Pseudo', name),
+    h('label', {}, 'Pays d\'origine (ton aéroport de départ)', home),
+    busyBtn('Créer mon personnage', () => {
+      f.busy = true;
+      game.net.send('hello', { name: name.value.trim(), home: home.value, phoneTicket: f.ticket });
+      game.rerenderPhone();
+    }),
+  );
+}
+
+PANELS.account = (game) => {
+  const p = game.profile;
+  return h(
+    'div',
+    {},
+    h('p', {}, 'Pseudo : ', h('b', {}, p.name)),
+    p.phone
+      ? h('div', { class: 'premium-card' }, h('p', { style: 'margin:0' }, '📱 Compte sécurisé par le numéro ', h('b', {}, p.phone)), h('p', { class: 'muted' }, 'Tu peux te reconnecter sur n\'importe quel appareil avec ce numéro : tes Cauris, Vida, véhicules et Premium te suivent.'))
+      : h(
+          'div',
+          { class: 'premium-card' },
+          h('p', { style: 'margin-top:0' }, h('b', {}, '⚠️ Compte invité'), ' : si tu changes de téléphone ou effaces ton navigateur, tu perds tout. Lie ton numéro pour sécuriser ton compte (obligatoire pour acheter des Vida).'),
+          phoneFlow(game, 'link'),
+        ),
+    h('div', { class: 'region-title' }, `Appareils connectés : ${p.devices}`),
+    h(
+      'div',
+      { class: 'row' },
+      p.devices > 1 ? h('button', { class: 'btn', onclick: () => confirm('Déconnecter tous tes autres appareils ?') && game.net.send('logoutOthers', { token: game.creds()?.token }) }, 'Déconnecter mes autres appareils') : null,
+      h(
+        'button',
+        {
+          class: 'btn danger',
+          onclick: () => {
+            const msg = p.phone ? 'Se déconnecter ? Tu pourras revenir avec ton numéro.' : 'Attention : compte invité. Sans numéro lié, tu ne pourras PAS récupérer ce compte. Se déconnecter quand même ?';
+            if (confirm(msg)) game.net.send('logout', { token: game.creds()?.token });
+          },
+        },
+        'Se déconnecter',
+      ),
+    ),
+  );
+};

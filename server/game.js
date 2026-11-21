@@ -20,6 +20,7 @@ import {
 } from '../shared/catalog.js';
 import { VEHICLE_BY_ID, MAX_VEHICLE_SPEED } from '../shared/vehicles.js';
 import { UserError } from './payments/service.js';
+import { normalizePhone, maskPhone } from './auth/otp.js';
 
 export const ROOMS = [
   { id: 'afrique-1', name: 'Afrique #1', max: 40 },
@@ -45,9 +46,10 @@ const cleanText = (s, max) =>
 
 export class Game {
   /** @param {import('./store.js').Store} store */
-  constructor(store, { tickMs = TICK_MS, flightMs = FLIGHT_DURATION_MS, now = () => Date.now(), payments = null } = {}) {
+  constructor(store, { tickMs = TICK_MS, flightMs = FLIGHT_DURATION_MS, now = () => Date.now(), payments = null, otp = null } = {}) {
     this.store = store;
     this.payments = payments;
+    this.otp = otp;
     this.flightMs = flightMs;
     this.now = now;
     this.nextSid = 1;
@@ -62,9 +64,10 @@ export class Game {
   }
 
   // --- Connexions -----------------------------------------------------------
-  connect(ws) {
+  connect(ws, { ip = 'inconnue' } = {}) {
     const client = {
       ws,
+      ip,
       sid: this.nextSid++,
       profile: null,
       room: null,
@@ -125,7 +128,7 @@ export class Game {
     if (!msg || typeof msg.t !== 'string') return;
     const handler = HANDLERS[msg.t];
     if (!handler) return;
-    if (msg.t !== 'hello' && !client.profile) return this.error(client, 'Non connecté.');
+    if (!PUBLIC_MESSAGES.has(msg.t) && !client.profile) return this.error(client, 'Non connecté.');
     const fail = (err) => {
       if (err instanceof UserError) return this.error(client, err.message);
       console.error(`[game] Erreur sur « ${msg.t} »:`, err);
@@ -137,6 +140,18 @@ export class Game {
     } catch (err) {
       fail(err);
     }
+  }
+
+  /** Ouvre la session d'un joueur authentifié (une seule session active par compte). */
+  login(client, profile, newToken) {
+    const existing = this.findOnline(profile.id);
+    if (existing && existing !== client) {
+      this.send(existing, 'kicked', { reason: 'Connexion depuis un autre appareil ou onglet.' });
+      this.disconnect(existing);
+      existing.ws.close();
+    }
+    client.profile = profile;
+    this.send(client, 'welcome', { id: profile.id, token: newToken, profile: this.profileView(profile), rooms: this.roomList(), sid: client.sid, sms: !!this.otp?.available });
   }
 
   /** Appelé par le service de paiement quand une commande est confirmée. */
@@ -172,6 +187,8 @@ export class Game {
     return {
       id: p.id,
       name: p.name,
+      phone: maskPhone(p.phone),
+      devices: p.tokenHashes.length,
       money: p.money,
       vida: p.vida,
       vidaLog: p.vidaLog.slice(0, 20),
@@ -310,27 +327,78 @@ export class Game {
 }
 
 // --- Gestionnaires de messages -------------------------------------------------
+const PUBLIC_MESSAGES = new Set(['hello', 'otpRequest', 'otpVerify', 'smsInfo']);
 const HANDLERS = {
-  hello(client, { id, token, name, home }) {
+  hello(client, { id, token, name, home, phoneTicket }) {
     if (client.profile) return;
     let profile = id && token ? this.store.authenticate(id, token) : null;
     let newToken;
     if (!profile) {
       if (id && token && !name) return this.send(client, 'authFailed', {});
+      let phone = null;
+      if (phoneTicket) {
+        phone = this.otp?.consumeTicket(phoneTicket);
+        if (!phone) return this.error(client, 'Vérification expirée. Recommence avec ton numéro.');
+        const owner = this.store.findByPhone(phone);
+        if (owner) return this.login(client, owner, this.store.addToken(owner)); // compte créé entre-temps
+      }
       const clean = cleanText(name ?? '', 16);
       if (!NAME_RE.test(clean)) return this.error(client, 'Pseudo invalide (2 à 16 lettres, chiffres, espaces, _ ou -).');
       if (!isCountry(home)) return this.error(client, 'Pays d\'origine invalide.');
-      ({ player: profile, token: newToken } = this.store.createPlayer(clean, home));
+      ({ player: profile, token: newToken } = this.store.createPlayer(clean, home, phone));
     }
-    // Une seule session active par compte
-    const existing = this.findOnline(profile.id);
-    if (existing) {
-      this.send(existing, 'kicked', { reason: 'Connexion depuis un autre onglet.' });
-      this.disconnect(existing);
-      existing.ws.close();
+    this.login(client, profile, newToken);
+  },
+
+  // --- Connexion par téléphone (code SMS) ------------------------------------------------
+  async otpRequest(client, { phone: raw }) {
+    const phone = normalizePhone(raw);
+    if (!phone) return this.error(client, 'Numéro invalide. Écris-le avec l\'indicatif, ex. +229 01 23 45 67 89.');
+    if (!this.otp) return this.error(client, 'Connexion par SMS indisponible.');
+    if (client.profile) {
+      const owner = this.store.findByPhone(phone);
+      if (owner && owner.id !== client.profile.id) return this.error(client, 'Ce numéro est déjà lié à un autre compte. Connecte-toi avec lui.');
     }
-    client.profile = profile;
-    this.send(client, 'welcome', { id: profile.id, token: newToken, profile: this.profileView(profile), rooms: this.roomList(), sid: client.sid });
+    const res = await this.otp.request(phone, client.ip);
+    this.send(client, 'otpSent', { phone: maskPhone(phone), cooldownMs: res.cooldownMs, devCode: res.devCode });
+  },
+
+  otpVerify(client, { phone: raw, code }) {
+    const phone = normalizePhone(raw);
+    if (!phone || !this.otp) return this.error(client, 'Numéro invalide.');
+    this.otp.verify(phone, typeof code === 'string' ? code.trim() : '');
+    const owner = this.store.findByPhone(phone);
+    if (client.profile) {
+      // Lier le numéro au compte actuel (compte invité -> compte sécurisé)
+      if (owner && owner.id !== client.profile.id) return this.error(client, 'Ce numéro est déjà lié à un autre compte.');
+      client.profile.phone = phone;
+      this.store.save();
+      this.sendProfile(client);
+      this.send(client, 'phoneLinked', {});
+      return this.toast(client, `📱 Numéro ${maskPhone(phone)} lié : ton compte est sécurisé.`, 'success');
+    }
+    if (owner) return this.login(client, owner, this.store.addToken(owner));
+    // Nouveau numéro : le joueur choisit son pseudo et son pays, puis envoie hello avec ce ticket
+    this.send(client, 'otpNeedProfile', { ticket: this.otp.issueTicket(phone) });
+  },
+
+  logout(client, { token, everywhere }) {
+    if (everywhere) this.store.keepOnlyToken(client.profile, '');
+    else this.store.removeToken(client.profile, token);
+    this.send(client, 'loggedOut', {});
+    this.disconnect(client);
+    client.ws.close();
+  },
+
+  logoutOthers(client, { token }) {
+    this.store.keepOnlyToken(client.profile, token);
+    for (const c of this.clients) if (c !== client && c.profile?.id === client.profile.id) c.ws.close();
+    this.sendProfile(client);
+    this.toast(client, 'Tes autres appareils ont été déconnectés.', 'success');
+  },
+
+  smsInfo(client) {
+    this.send(client, 'smsInfo', { available: !!this.otp?.available });
   },
 
   rooms(client) {
@@ -489,6 +557,7 @@ const HANDLERS = {
 
   async payCreate(client, { pack, method }) {
     if (!this.payments) return this.error(client, 'Paiements indisponibles.');
+    if (!client.profile.phone) return this.send(client, 'phoneRequired', { reason: 'Pour acheter des Vida, lie d\'abord ton numéro de téléphone : tes achats seront récupérables sur tous tes appareils.' });
     const { order, redirectUrl } = await this.payments.createOrder(client.profile, pack, method);
     this.send(client, 'payCreated', { order: this.orderView(order), redirectUrl });
   },

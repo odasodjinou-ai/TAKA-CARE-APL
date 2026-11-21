@@ -23,7 +23,13 @@
       <div class="card hero">
         <h1>Terra Vida</h1>
         <p class="tagline">Voyage dans tous les pays du monde, trouve un métier, fonde ta famille.</p>
-        <form id="login-form" autocomplete="off">
+        <div class="tabs" id="login-tabs">
+          <button class="btn active" type="button" data-tab="phone">📱 Avec mon numéro</button>
+          <button class="btn" type="button" data-tab="guest">👤 Jouer en invité</button>
+        </div>
+        <div id="phone-box"></div>
+        <form id="login-form" autocomplete="off" class="hidden">
+          <p class="muted">Compte invité : lié à ce navigateur uniquement. Tu pourras lier ton numéro plus tard.</p>
           <label>Pseudo
             <input id="login-name" maxlength="16" required placeholder="Ton pseudo" />
           </label>
@@ -48,7 +54,7 @@
 
     <!-- HUD en jeu -->
     <div id="hud" class="hidden">
-      <div id="hud-top-left" class="glass">
+      <div id="hud-top-left" class="glass" title="Mon compte" style="cursor:pointer">
         <div id="hud-name"></div>
         <div id="hud-money"></div>
         <div id="hud-vida"></div>

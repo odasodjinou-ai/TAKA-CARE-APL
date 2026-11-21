@@ -12,7 +12,7 @@ import { createCar, setCarColor, spinWheels, disposeCar, bodySpec } from './vehi
 import { Driving } from './driving.js';
 import { EngineSound } from './audio.js';
 import { VEHICLE_BY_ID } from '/shared/vehicles.js';
-import { $, h, toast, openPanel, closePanel, refreshPanel, panelOpen, PANELS, drawMinimap } from './ui.js';
+import { $, h, toast, openPanel, closePanel, refreshPanel, panelOpen, PANELS, drawMinimap, phoneFlow } from './ui.js';
 
 const CREDS_KEY = 'terravida:creds';
 const IS_TOUCH = matchMedia('(pointer: coarse)').matches;
@@ -182,6 +182,7 @@ const PANEL_TITLES = {
   family: '👨‍👩‍👧 Famille',
   help: '❔ Aide',
   vida: '💎 Vida & Premium',
+  account: '👤 Mon compte',
 };
 
 function togglePanel(id, title = PANEL_TITLES[id]) {
@@ -297,6 +298,7 @@ function toggleCar() {
 
 for (const b of document.querySelectorAll('#toolbar [data-panel]')) b.addEventListener('click', () => togglePanel(b.dataset.panel));
 $('#toolbar [data-action="car"]').addEventListener('click', toggleCar);
+$('#hud-top-left').addEventListener('click', () => togglePanel('account'));
 $('#toolbar [data-action="servers"]').addEventListener('click', () => {
   net.send('rooms');
   showScreen('servers');
@@ -622,9 +624,29 @@ $('#login-form').addEventListener('submit', (e) => {
   }
 });
 $('#btn-logout').addEventListener('click', () => {
+  if (game.profile && !game.profile.phone && !confirm('Compte invité : sans numéro lié, tu ne pourras pas le récupérer. Changer quand même ?')) return;
   localStorage.removeItem(CREDS_KEY);
   location.reload();
 });
+
+// Connexion par téléphone : onglets et formulaire
+game.guessCountry = COUNTRY_BY_CODE.has(guess) ? guess : 'BJ';
+game.creds = () => loadCreds();
+game.rerenderPhone = () => {
+  if (panelOpen() === 'account') return refreshPanel();
+  const box = $('#phone-box');
+  if (!box.classList.contains('hidden')) box.replaceChildren(phoneFlow(game, 'login'));
+};
+for (const b of document.querySelectorAll('#login-tabs [data-tab]')) {
+  b.addEventListener('click', () => {
+    for (const x of document.querySelectorAll('#login-tabs [data-tab]')) x.classList.toggle('active', x === b);
+    const phone = b.dataset.tab === 'phone';
+    $('#phone-box').classList.toggle('hidden', !phone);
+    $('#login-form').classList.toggle('hidden', phone);
+    game.rerenderPhone();
+  });
+}
+game.rerenderPhone();
 
 // Chat
 $('#chat-form').addEventListener('submit', (e) => {
@@ -654,6 +676,35 @@ net.on('open', () => {
   $('#connection').classList.add('hidden');
   const creds = loadCreds();
   if (creds?.id && creds?.token) net.send('hello', creds);
+  else net.send('smsInfo');
+});
+net.on('smsInfo', (m) => {
+  game.smsAvailable = m.available;
+  if (!m.available) $('#login-tabs [data-tab="guest"]').click(); // pas de SMS : mode invité par défaut
+  else game.rerenderPhone();
+});
+net.on('otpSent', (m) => {
+  const f = game.phone;
+  Object.assign(f, { step: 'code', busy: false, masked: m.phone, until: Date.now() + m.cooldownMs, dev: m.devCode ?? null });
+  game.rerenderPhone();
+});
+net.on('otpNeedProfile', (m) => {
+  Object.assign(game.phone, { step: 'profile', busy: false, ticket: m.ticket });
+  game.rerenderPhone();
+});
+net.on('phoneLinked', () => {
+  game.phone = null;
+  if (panelOpen() === 'account') refreshPanel();
+});
+net.on('phoneRequired', (m) => {
+  game.pay && (game.pay.window?.close(), (game.pay.window = null));
+  toast(m.reason, 'warn');
+  openPanel('account', PANEL_TITLES.account, () => PANELS.account(game));
+});
+net.on('loggedOut', () => {
+  localStorage.removeItem(CREDS_KEY);
+  net.close();
+  location.reload();
 });
 net.on('close', () => {
   if (game.profile) $('#connection').classList.remove('hidden');
@@ -673,6 +724,8 @@ net.on('welcome', (m) => {
   }
   game.profile = m.profile;
   game.sid = m.sid;
+  game.phone = null;
+  if (m.sms !== undefined) game.smsAvailable = m.sms;
   $('#login-status').textContent = '';
   if (!me.character) {
     me.character = new Character(m.profile.skin);
@@ -814,6 +867,10 @@ net.on('receipts', (m) => {
 net.on('toast', (m) => toast(m.message, m.kind));
 net.on('error', (m) => {
   toast(m.message, 'error');
+  if (game.phone?.busy) {
+    game.phone.busy = false;
+    game.rerenderPhone();
+  }
   if (game.pay?.window) {
     game.pay.window.close(); // l'onglet ouvert pour le paiement ne sert plus
     game.pay.window = null;

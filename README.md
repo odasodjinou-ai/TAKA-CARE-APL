@@ -10,7 +10,7 @@ personnalise ton **skin**, fonde ta **famille** et deviens **⭐ Premium**.
 npm install
 npm start          # http://localhost:3000
 npm test           # tests du serveur (économie, paiements, anti-triche, vols, familles)
-PAYMENTS_SANDBOX=1 npm start   # avec une caisse de paiement simulée (développement)
+PAYMENTS_SANDBOX=1 SMS_DEV=1 npm start   # paiements simulés + code SMS affiché à l'écran (développement)
 ```
 
 Copie `.env.example` en `.env` (ou en variables d'environnement de ton hébergeur) pour la production.
@@ -37,6 +37,28 @@ Variables : `PORT` (défaut 3000), `DATA_FILE` (défaut `data/db.json`).
 Commandes : ZQSD/WASD/flèches, souris pour la caméra, Maj courir, Espace sauter (frein à main en voiture),
 **E** interagir, **V** véhicule, **B** klaxon, **M** son, **P** Vida/Premium, **C** garde-robe, **G** famille,
 **H** aide, Entrée chat. Sur mobile : joystick + boutons.
+
+## Connexion par téléphone (code SMS)
+
+- **Nouveau joueur** : numéro → code à 6 chiffres reçu par SMS → pseudo + pays.
+- **Joueur existant** : le même numéro ouvre le même compte sur n'importe quel appareil (5 appareils max,
+  bouton « Déconnecter mes autres appareils »).
+- **Mode invité** toujours possible ; l'invité peut lier son numéro plus tard depuis *Mon compte*
+  (clic sur le cadre en haut à gauche) sans rien perdre. **Le numéro est obligatoire pour acheter des Vida.**
+- Sécurité : code tiré aléatoirement (générateur cryptographique), seule une empreinte HMAC est gardée,
+  expiration 5 min, 5 essais max, 60 s entre deux envois, 5 SMS/heure par numéro et 15/heure par IP
+  (protège aussi ta facture SMS). Le numéro n'est jamais montré aux autres joueurs (affiché masqué).
+
+### Fournisseur SMS — coûts constatés pour le Bénin (nov. 2026)
+| Fournisseur | Prix indicatif par SMS | Remarque |
+|---|---|---|
+| Opérateurs locaux / agrégateurs (MTN, Moov, Celtiis) | ~10 à 15 FCFA | le moins cher, mais contrat local à négocier |
+| Africa's Talking | sur devis | branché ici, présent en Afrique de l'Ouest |
+| Plivo | ~0,22 à 0,27 $ | |
+| Twilio | ~0,30 $ | branché ici, le plus simple à démarrer, le plus cher |
+
+Pour réduire les coûts à grande échelle, un agrégateur local s'ajoute facilement dans
+`server/auth/sms.js` (une fonction `send(numéro, message)`).
 
 ## Paiements (Vida)
 
@@ -80,6 +102,7 @@ branchée ici.
 
 ```
 server/   index.js (HTTP + WebSocket + routes /pay et /receipt) · game.js (règles) · store.js (persistance)
+server/auth/   otp.js (codes à usage unique) · sms.js (Africa's Talking, Twilio, mode dev)
 server/payments/   providers.js (FedaPay, Wave, CinetPay, PayPal, simulation) · service.js (commandes) · pages.js (reçus)
 shared/   countries.js · layout.js (carte déterministe) · catalog.js (économie) · vehicles.js (catalogue)
 public/   index.html · css/ · js/ (main, world, character, vehicles, driving, audio, ui, net)
@@ -90,8 +113,6 @@ public/   index.html · css/ · js/ (main, world, character, vehicles, driving, 
   vitesse maximale (anti-téléportation), objets possédés, limitation de débit, textes nettoyés.
 - `shared/layout.js` est exécuté **à l'identique** côté client et serveur : même carte sans transfert de données.
 - Comptes sans mot de passe : un jeton aléatoire stocké dans le navigateur (haché côté serveur).
-  ⚠️ Avec de l'argent réel en jeu, ajoute une vraie connexion (téléphone + code SMS, ou e-mail) pour que
-  les joueurs ne perdent pas leurs Vida en changeant de navigateur.
 - Marques de véhicules **fictives** : utiliser de vraies marques (noms, logos, formes) exige une licence.
 
 ## Limites actuelles / suite

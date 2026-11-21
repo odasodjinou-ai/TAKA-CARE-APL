@@ -9,6 +9,8 @@ import { Game } from './game.js';
 import { createProviders } from './payments/providers.js';
 import { PaymentService } from './payments/service.js';
 import { receiptPage, sandboxPage } from './payments/pages.js';
+import { createSmsProvider } from './auth/sms.js';
+import { OtpService } from './auth/otp.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.PORT) || 3000;
@@ -175,14 +177,19 @@ const store = new Store(DATA_FILE);
 const providers = createProviders(process.env);
 let game;
 const payments = new PaymentService(store, providers, { publicUrl: PUBLIC_URL, onPaid: (order) => game.notifyPaid(order) });
-game = new Game(store, { payments });
+const sms = createSmsProvider(process.env);
+const otp = new OtpService(sms);
+console.log(`Connexion par SMS : ${sms ? sms.label : 'désactivée (configure un fournisseur SMS, voir README)'}`);
+game = new Game(store, { payments, otp });
 const active = Object.values(providers).filter((p) => p.enabled).map((p) => p.label);
 console.log(`Paiements actifs : ${active.length ? active.join(', ') : 'aucun (configure les clés, voir README)'}`);
 if (providers.sandbox.enabled) console.warn('⚠️  Mode PAYMENTS_SANDBOX actif : paiements simulés, à ne jamais utiliser en production.');
 const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 4096 });
 
-wss.on('connection', (ws) => {
-  const client = game.connect(ws);
+wss.on('connection', (ws, req) => {
+  // Derrière un proxy (Nginx, Render, Railway…), l'IP réelle est dans X-Forwarded-For
+  const fwd = process.env.TRUST_PROXY === '1' ? String(req.headers['x-forwarded-for'] ?? '').split(',')[0].trim() : '';
+  const client = game.connect(ws, { ip: fwd || req.socket.remoteAddress });
   ws.isAlive = true;
   ws.on('pong', () => (ws.isAlive = true));
   ws.on('message', (data, isBinary) => {
