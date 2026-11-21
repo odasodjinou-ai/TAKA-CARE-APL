@@ -1,7 +1,14 @@
 // Interface : notifications, panneaux (métiers, boutique, aéroport, famille…), minicarte.
 // Toutes les données venant d'autres joueurs passent par textContent (pas d'injection HTML).
 import { COUNTRIES, COUNTRY_BY_CODE, REGIONS } from '/shared/countries.js';
-import { JOBS, ITEMS, itemsBySlot, flightPrice, formatMoney, FAMILY_CREATION_COST } from '/shared/catalog.js';
+import * as THREE from 'three';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import {
+  JOBS, ITEMS, itemsBySlot, flightPrice, formatMoney, formatVida, formatXof, formatPrice, FAMILY_CREATION_COST,
+  VIDA_PACKS, PREMIUM, EXCHANGE, PAYMENT_METHODS,
+} from '/shared/catalog.js';
+import { VEHICLES, VEHICLE_BY_ID, BRANDS, CATEGORIES } from '/shared/vehicles.js';
+import { createCar, disposeCar } from './vehicles.js';
 import { ROAD_LINES, WORLD, PLACES } from '/shared/layout.js';
 
 export const $ = (sel) => document.querySelector(sel);
@@ -87,12 +94,178 @@ export const PANELS = {
 
   cars(game) {
     const p = game.profile;
+    const owned = new Set(p.owned);
+    game.dealer ??= { cat: 'all', sel: p.skin.car };
+    const d = game.dealer;
+    const v = VEHICLE_BY_ID.get(d.sel) ?? VEHICLES[0];
+    const id = `car:${v.id}`;
+    const has = owned.has(id);
+    const it = ITEMS[id];
+    const equipped = p.skin.car === v.id;
+    const brand = BRANDS[v.brand];
+    const list = VEHICLES.filter((x) => d.cat === 'all' || x.body === d.cat || (d.cat === 'electric' && x.electric) || (d.cat === 'premium' && (x.premiumOnly || x.currency === 'vida')));
+    const zeroTo100 = (100 / 3.6 / (v.accel / 1.15) / 1.6).toFixed(1);
     return h(
       'div',
       {},
-      shopList(game, ['car'], 'cars'),
-      h('div', { class: 'row' }, h('label', {}, 'Couleur de ta voiture', h('input', { type: 'color', value: p.skin.carColor, onchange: (e) => game.saveSkin({ carColor: e.target.value }) }))),
+      h(
+        'div',
+        { class: 'tabs' },
+        [['all', 'Tous'], ...Object.entries(CATEGORIES), ['electric', '⚡ Électriques'], ['premium', '💎 Luxe & Premium']].map(([k, label]) =>
+          h('button', { class: `btn ${d.cat === k ? 'active' : ''}`, onclick: () => ((d.cat = k), refreshPanel()) }, label),
+        ),
+      ),
+      h('div', { class: 'sticky' }, carPreview(v.id, p.skin.carColor),
+      h(
+        'div',
+        { class: 'row' },
+        h(
+          'div',
+          { style: 'flex:1' },
+          h('div', {}, `${brand.flag} `, h('b', {}, v.name), v.premiumOnly ? ' ⭐' : '', v.electric ? ' ⚡' : ''),
+          h('div', { class: 'spec' }, `${CATEGORIES[v.body]} · ${brand.origin} · ${v.kmh} km/h · 0-100 en ${zeroTo100} s`),
+          h('div', {}, h('b', {}, v.price ? formatPrice(v.price, v.currency) : 'Offert')),
+        ),
+        has
+          ? h('button', { class: 'btn', disabled: equipped, onclick: () => game.saveSkin({ car: v.id }) }, equipped ? 'Ton véhicule' : 'Choisir')
+          : h(
+              'button',
+              { class: 'btn primary', disabled: !canAfford(p, it) || (v.premiumOnly && !p.premium?.active), onclick: () => game.net.send('buy', { item: id }) },
+              v.premiumOnly && !p.premium?.active ? 'Premium requis' : 'Acheter',
+            ),
+      ),
+      ),
+      h('div', { class: 'row' }, h('label', {}, 'Couleur de la peinture', h('input', { type: 'color', value: p.skin.carColor, onchange: (e) => game.saveSkin({ carColor: e.target.value }) }))),
+      h(
+        'ul',
+        { class: 'list' },
+        list.map((x) =>
+          h(
+            'li',
+            { class: owned.has(`car:${x.id}`) ? 'owned' : '', style: `cursor:pointer;${x.id === v.id ? 'border-color:#0ea5e9' : ''}`, onclick: () => ((d.sel = x.id), refreshPanel()) },
+            h('div', {}, `${BRANDS[x.brand].flag} `, h('b', {}, x.name), x.premiumOnly ? ' ⭐' : '', h('div', { class: 'meta' }, `${CATEGORIES[x.body]} · ${x.kmh} km/h`)),
+            h('span', { class: 'meta' }, owned.has(`car:${x.id}`) ? '✔ Possédé' : x.price ? formatPrice(x.price, x.currency) : 'Offert'),
+          ),
+        ),
+      ),
+      h('p', { class: 'muted' }, 'Marques fictives inspirées des constructeurs du monde entier.'),
     );
+  },
+
+  vida(game) {
+    const p = game.profile;
+    const pay = (game.pay ??= { tab: 'buy', pack: VIDA_PACKS[1].id, method: null, methods: null, receipts: null, pending: null });
+    if (!pay.methods) game.net.send('payInfo');
+    const tab = (k, label) => h('button', { class: `btn ${pay.tab === k ? 'active' : ''}`, onclick: () => ((pay.tab = k), k === 'history' && game.net.send('receipts'), refreshPanel()) }, label);
+    const header = h(
+      'div',
+      {},
+      h('p', {}, 'Solde : ', h('b', { style: 'color:#c4b5fd' }, formatVida(p.vida ?? 0)), p.premium?.active ? ` · ⭐ Premium jusqu'au ${new Date(p.premium.until).toLocaleDateString('fr-FR')}` : ''),
+      h('div', { class: 'tabs' }, tab('buy', '💳 Acheter des Vida'), tab('premium', '⭐ Premium'), tab('exchange', '🐚 Changer en Cauris'), tab('history', '🧾 Reçus')),
+    );
+    let body;
+    if (pay.tab === 'buy') {
+      const pack = VIDA_PACKS.find((x) => x.id === pay.pack);
+      const methods = pay.methods ?? [];
+      const method = methods.find((m) => m.id === pay.method && m.enabled);
+      body = h(
+        'div',
+        {},
+        h('p', { class: 'muted' }, 'Les Vida sont la monnaie de l\'application : Premium, véhicules de luxe, change en Cauris. Chaque paiement donne un reçu.'),
+        h(
+          'div',
+          { class: 'grid' },
+          VIDA_PACKS.map((x) =>
+            h('div', { class: `pack ${x.id === pay.pack ? 'sel' : ''}`, onclick: () => ((pay.pack = x.id), refreshPanel()) }, h('div', { class: 'v' }, formatVida(x.vida)), h('div', {}, formatXof(x.xof)), x.bonus ? h('div', { class: 'bonus' }, `Bonus ${x.bonus}`) : null),
+          ),
+        ),
+        h('div', { class: 'region-title' }, 'Moyen de paiement'),
+        methods.length === 0
+          ? h('p', { class: 'muted' }, 'Chargement…')
+          : h(
+              'div',
+              { class: 'grid' },
+              methods.map((m) =>
+                h(
+                  'button',
+                  { class: `btn method ${m.id === pay.method ? 'active' : ''}`, disabled: !m.enabled, title: m.enabled ? `via ${m.via}` : 'Pas encore activé', onclick: () => ((pay.method = m.id), refreshPanel()) },
+                  h('span', { class: 'sw', style: `background:${m.color}` }),
+                  m.label,
+                ),
+              ),
+            ),
+        methods.length && !methods.some((m) => m.enabled) ? h('p', { class: 'muted' }, 'Aucun moyen de paiement n\'est encore activé sur ce serveur.') : null,
+        h(
+          'button',
+          {
+            class: 'btn primary big',
+            disabled: !method || !pack,
+            onclick: () => {
+              // Ouvre l'onglet tout de suite (sinon le navigateur bloque la fenêtre)
+              pay.window = window.open('about:blank', '_blank');
+              game.net.send('payCreate', { pack: pack.id, method: method.id });
+            },
+          },
+          method ? `Payer ${formatXof(pack.xof)} avec ${method.label}` : 'Choisis un moyen de paiement',
+        ),
+        pay.pending ? pendingView(game, pay) : null,
+      );
+    } else if (pay.tab === 'premium') {
+      const price = p.premium?.nextPrice ?? PREMIUM.firstPrice;
+      body = h(
+        'div',
+        { class: 'premium-card' },
+        h('h3', { style: 'margin-top:0' }, '⭐ Titre Premium — 3 mois'),
+        h(
+          'ul',
+          {},
+          h('li', {}, 'Badge ⭐ doré à côté de ton pseudo, visible par tous'),
+          h('li', {}, `+${PREMIUM.jobBonus * 100} % de salaire sur tous les métiers`),
+          h('li', {}, `−${PREMIUM.flightDiscount * 100} % sur les billets d'avion`),
+          h('li', {}, 'Accès aux véhicules exclusifs (Rossa Tempesta, Aurora Volt S…)'),
+        ),
+        h('p', {}, p.premium?.active ? `Actif jusqu'au ${new Date(p.premium.until).toLocaleDateString('fr-FR')}. Renouveler ajoute 3 mois.` : 'Inactif.'),
+        h('p', {}, h('b', {}, `${formatVida(price)} (${formatXof(price * 10)})`), price === PREMIUM.firstPrice ? ' — tarif de bienvenue pour ton 1er abonnement' : ' — tarif de renouvellement'),
+        h(
+          'button',
+          { class: 'btn primary big', disabled: (p.vida ?? 0) < price, onclick: () => confirm(`Activer Premium pour ${formatVida(price)} ?`) && game.net.send('premiumBuy') },
+          (p.vida ?? 0) < price ? `Il te faut ${formatVida(price)} — recharge d'abord` : p.premium?.active ? 'Prolonger de 3 mois' : 'Devenir Premium',
+        ),
+      );
+    } else if (pay.tab === 'exchange') {
+      body = h(
+        'ul',
+        { class: 'list' },
+        EXCHANGE.map((e) =>
+          h('li', {}, h('div', {}, h('b', {}, formatVida(e.vida)), ' → ', h('b', {}, formatMoney(e.cauris))), h('button', { class: 'btn primary', disabled: (p.vida ?? 0) < e.vida, onclick: () => game.net.send('exchange', { id: e.id }) }, 'Changer')),
+        ),
+      );
+    } else {
+      body = h(
+        'div',
+        {},
+        h('div', { class: 'region-title' }, 'Paiements'),
+        !pay.receipts
+          ? h('p', { class: 'muted' }, 'Chargement…')
+          : pay.receipts.length === 0
+            ? h('p', { class: 'muted' }, 'Aucun paiement pour l\'instant.')
+            : h(
+                'ul',
+                { class: 'list' },
+                pay.receipts.map((o) =>
+                  h(
+                    'li',
+                    {},
+                    h('div', {}, h('b', {}, `${formatVida(o.vida)} — ${formatXof(o.xof)}`), h('div', { class: 'meta' }, `${new Date(o.createdAt).toLocaleString('fr-FR')} · ${PAYMENT_METHODS[o.method]?.label ?? o.method}${o.receiptNo ? ` · ${o.receiptNo}` : ''}`)),
+                    h('div', {}, statusBadge(o.status), ' ', h('a', { class: 'btn', href: o.receiptUrl, target: '_blank', rel: 'noopener' }, '🧾 Reçu')),
+                  ),
+                ),
+              ),
+        h('div', { class: 'region-title' }, 'Mouvements de Vida'),
+        h('ul', { class: 'list' }, (p.vidaLog ?? []).map((l) => h('li', {}, h('span', { class: 'meta' }, `${new Date(l.at).toLocaleDateString('fr-FR')} · ${l.label}`), h('b', { style: `color:${l.delta > 0 ? '#4ade80' : '#fca5a5'}` }, `${l.delta > 0 ? '+' : ''}${formatVida(l.delta)}`)))),
+      );
+    }
+    return h('div', {}, header, body);
   },
 
   airport(game) {
@@ -217,7 +390,10 @@ export const PANELS = {
       ['Maj', 'Courir'],
       ['Espace', 'Sauter / frein à main'],
       ['E', 'Interagir (emplois, boutique, concession, aéroport)'],
-      ['V', 'Sortir / ranger ta voiture'],
+      ['V', 'Sortir / ranger ton véhicule'],
+      ['Espace (en voiture)', 'Frein à main / dérapage'],
+      ['B · M', 'Klaxon · couper le son'],
+      ['P', '💎 Vida, Premium et reçus'],
       ['C · G · H', 'Garde-robe · Famille · Aide'],
       ['Entrée', 'Discuter'],
     ];
@@ -234,13 +410,15 @@ export const PANELS = {
   },
 };
 
+const canAfford = (p, it) => (it.currency === 'vida' ? (p.vida ?? 0) >= it.price : p.money >= it.price);
+
 function shopList(game, slots, place) {
   const p = game.profile;
   const owned = new Set(p.owned);
   return h(
     'div',
     {},
-    h('p', {}, 'Ton solde : ', h('b', {}, formatMoney(p.money))),
+    h('p', {}, 'Ton solde : ', h('b', {}, formatMoney(p.money)), ' · ', h('b', {}, formatVida(p.vida ?? 0))),
     slots.map((slot) =>
       h(
         'ul',
@@ -251,10 +429,10 @@ function shopList(game, slots, place) {
           return h(
             'li',
             { class: has ? 'owned' : '' },
-            h('div', {}, h('b', {}, it.name), h('div', { class: 'meta' }, it.price ? formatMoney(it.price) : 'Gratuit', it.speed ? ` · ${Math.round(it.speed * 3.6)} km/h` : '')),
+            h('div', {}, h('b', {}, it.name), h('div', { class: 'meta' }, it.price ? formatPrice(it.price, it.currency) : 'Gratuit')),
             has
               ? h('button', { class: 'btn', disabled: equipped, onclick: () => game.saveSkin({ [slot]: it.value }) }, equipped ? 'Équipé' : 'Équiper')
-              : h('button', { class: 'btn primary', disabled: p.money < it.price, onclick: () => game.net.send('buy', { item: it.id }) }, 'Acheter'),
+              : h('button', { class: 'btn primary', disabled: !canAfford(p, it), onclick: () => game.net.send('buy', { item: it.id }) }, 'Acheter'),
           );
         }),
       ),
@@ -331,4 +509,84 @@ export function drawMinimap(canvas, { pos, yaw, remotes, mission }) {
   ctx.closePath();
   ctx.fill();
   ctx.restore();
+}
+
+const STATUS_LABEL = { paid: 'Payé', pending: 'En attente', failed: 'Échoué', review: 'Vérification' };
+function statusBadge(status) {
+  return h('span', { class: `status ${status}` }, STATUS_LABEL[status] ?? status);
+}
+
+function pendingView(game, pay) {
+  const o = pay.pending.order;
+  return h(
+    'div',
+    { class: 'premium-card', style: 'margin-top:12px' },
+    h('div', {}, 'Commande ', h('b', {}, o.id), ' ', statusBadge(o.status)),
+    o.status === 'pending'
+      ? h(
+          'div',
+          {},
+          h('p', { class: 'muted' }, 'Termine le paiement dans l\'onglet ouvert. Tes Vida arrivent automatiquement dès confirmation.'),
+          h('a', { class: 'btn blue', href: pay.pending.redirectUrl, target: '_blank', rel: 'noopener' }, 'Ouvrir la page de paiement'),
+          ' ',
+          h('button', { class: 'btn', onclick: () => game.net.send('payCheck', { id: o.id }) }, 'J\'ai payé — vérifier'),
+        )
+      : h('p', {}, o.status === 'paid' ? `✅ +${formatVida(o.vida)} crédités. ` : 'Le paiement n\'a pas abouti. ', h('a', { class: 'btn', href: o.receiptUrl, target: '_blank', rel: 'noopener' }, '🧾 Voir le reçu')),
+  );
+}
+
+// --- Aperçu 3D des véhicules (concession) -------------------------------------------------------
+let preview = null;
+function carPreview(model, color) {
+  if (!preview) {
+    const canvas = h('canvas', { id: 'car-preview' });
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    const scene = new THREE.Scene();
+    scene.environment = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture;
+    const sun = new THREE.DirectionalLight('#ffffff', 2);
+    sun.position.set(4, 8, 6);
+    scene.add(sun, new THREE.AmbientLight('#ffffff', 0.4));
+    const floor = new THREE.Mesh(new THREE.CircleGeometry(9, 48).rotateX(-Math.PI / 2), new THREE.MeshStandardMaterial({ color: '#1e293b', roughness: 0.4, metalness: 0.2 }));
+    scene.add(floor);
+    const camera = new THREE.PerspectiveCamera(35, 2.8, 0.1, 100);
+    preview = { canvas, renderer, scene, camera, car: null, key: '', running: false };
+  }
+  const key = `${model}|${color}`;
+  if (preview.key !== key) {
+    if (preview.car) {
+      preview.scene.remove(preview.car);
+      disposeCar(preview.car);
+    }
+    preview.car = createCar(model, color);
+    preview.scene.add(preview.car);
+    preview.key = key;
+    const box = new THREE.Box3().setFromObject(preview.car);
+    const size = box.getSize(new THREE.Vector3()).length();
+    preview.camera.position.set(size * 0.75, size * 0.32, size * 0.75);
+    preview.camera.lookAt(0, size * 0.08, 0);
+  }
+  if (!preview.running) {
+    preview.running = true;
+    const loop = (t) => {
+      if (!preview.canvas.isConnected) {
+        preview.running = false;
+        return;
+      }
+      const w = preview.canvas.clientWidth;
+      const hgt = preview.canvas.clientHeight;
+      if (preview.canvas.width !== Math.floor(w * preview.renderer.getPixelRatio())) {
+        preview.renderer.setSize(w, hgt, false);
+        preview.camera.aspect = w / hgt;
+        preview.camera.updateProjectionMatrix();
+      }
+      preview.car.rotation.y = t * 0.0005;
+      preview.renderer.render(preview.scene, preview.camera);
+      requestAnimationFrame(loop);
+    };
+    requestAnimationFrame(loop);
+  }
+  return preview.canvas;
 }

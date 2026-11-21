@@ -11,7 +11,15 @@ import {
   FAMILY_CREATION_COST,
   FAMILY_MAX_MEMBERS,
   formatMoney,
+  formatVida,
+  formatPrice,
+  isPremium,
+  premiumPrice,
+  PREMIUM,
+  EXCHANGE,
 } from '../shared/catalog.js';
+import { VEHICLE_BY_ID, MAX_VEHICLE_SPEED } from '../shared/vehicles.js';
+import { UserError } from './payments/service.js';
 
 export const ROOMS = [
   { id: 'afrique-1', name: 'Afrique #1', max: 40 },
@@ -22,7 +30,7 @@ export const ROOMS = [
 ];
 
 const TICK_MS = 100;
-const MAX_SPEED = 50; // m/s, au-dessus de la voiture la plus rapide (marge réseau)
+const MAX_SPEED = MAX_VEHICLE_SPEED + 8; // m/s, au-dessus du véhicule le plus rapide (marge réseau)
 const NAME_RE = /^[\p{L}\p{N} _-]{2,16}$/u;
 const FAMILY_RE = /^[\p{L}\p{N} '_-]{3,20}$/u;
 const INVITE_TTL_MS = 120_000;
@@ -37,8 +45,9 @@ const cleanText = (s, max) =>
 
 export class Game {
   /** @param {import('./store.js').Store} store */
-  constructor(store, { tickMs = TICK_MS, flightMs = FLIGHT_DURATION_MS, now = () => Date.now() } = {}) {
+  constructor(store, { tickMs = TICK_MS, flightMs = FLIGHT_DURATION_MS, now = () => Date.now(), payments = null } = {}) {
     this.store = store;
+    this.payments = payments;
     this.flightMs = flightMs;
     this.now = now;
     this.nextSid = 1;
@@ -117,12 +126,40 @@ export class Game {
     const handler = HANDLERS[msg.t];
     if (!handler) return;
     if (msg.t !== 'hello' && !client.profile) return this.error(client, 'Non connecté.');
-    try {
-      handler.call(this, client, msg);
-    } catch (err) {
+    const fail = (err) => {
+      if (err instanceof UserError) return this.error(client, err.message);
       console.error(`[game] Erreur sur « ${msg.t} »:`, err);
       this.error(client, 'Erreur serveur.');
+    };
+    try {
+      const r = handler.call(this, client, msg);
+      if (r && typeof r.catch === 'function') r.catch(fail);
+    } catch (err) {
+      fail(err);
     }
+  }
+
+  /** Appelé par le service de paiement quand une commande est confirmée. */
+  notifyPaid(order) {
+    const c = this.findOnline(order.playerId);
+    if (!c) return;
+    this.sendProfile(c);
+    this.send(c, 'paid', { order: this.orderView(order) });
+    this.toast(c, `💎 Paiement reçu : +${formatVida(order.vida)}. Merci !`, 'success');
+  }
+
+  orderView(o) {
+    return {
+      id: o.id,
+      vida: o.vida,
+      xof: o.xof,
+      method: o.method,
+      status: o.status,
+      createdAt: o.createdAt,
+      paidAt: o.paidAt,
+      receiptNo: o.receiptNo,
+      receiptUrl: `/receipt/${o.id}?k=${o.receiptKey}`,
+    };
   }
 
   // --- Vues publiques -----------------------------------------------------------
@@ -136,6 +173,9 @@ export class Game {
       id: p.id,
       name: p.name,
       money: p.money,
+      vida: p.vida,
+      vidaLog: p.vidaLog.slice(0, 20),
+      premium: { active: isPremium(p, this.now()), until: p.premium.until, nextPrice: premiumPrice(p) },
       home: p.home,
       country: p.country,
       skin: p.skin,
@@ -161,6 +201,7 @@ export class Game {
       name: c.profile.name,
       skin: c.profile.skin,
       family: this.familyName(c.profile),
+      premium: isPremium(c.profile, this.now()),
       job: c.mission?.job ?? null,
       x: c.pos.x,
       y: c.pos.y,
@@ -254,7 +295,8 @@ export class Game {
     const target = candidates[Math.floor(Math.random() * candidates.length)] ?? layout.poi[0];
     const dist = distance2D(target, client.pos);
     const [min, max] = job.reward;
-    const reward = Math.round(min + (max - min) * clamp(dist / 330, 0, 1));
+    const base = min + (max - min) * clamp(dist / 330, 0, 1);
+    const reward = Math.round(base * (isPremium(client.profile, this.now()) ? 1 + PREMIUM.jobBonus : 1));
     client.mission = {
       id: `${client.sid}-${this.now()}`,
       job: jobId,
@@ -352,6 +394,10 @@ const HANDLERS = {
 
   car(client, { on }) {
     if (!client.zone) return;
+    const v = VEHICLE_BY_ID.get(client.profile.skin.car);
+    if (on && v?.premiumOnly && !isPremium(client.profile, this.now())) {
+      return this.error(client, `${v.name} est réservé aux membres Premium ⭐.`);
+    }
     client.veh = on ? client.profile.skin.car : null;
     if (!client.veh && client.mission && JOBS[client.mission.job].needsCar) {
       // Le taxi continue, mais il faudra remonter en voiture pour valider.
@@ -366,12 +412,19 @@ const HANDLERS = {
     const place = it.slot === 'car' ? 'cars' : 'shop';
     if (!this.nearPlace(client, place)) return this.error(client, `Va au ${PLACES[place].label.toLowerCase()} pour acheter.`);
     if (p.owned.includes(item)) return this.error(client, 'Tu possèdes déjà cet objet.');
-    if (p.money < it.price) return this.error(client, 'Pas assez d\'argent.');
-    p.money -= it.price;
+    if (it.premiumOnly && !isPremium(p, this.now())) return this.error(client, 'Réservé aux membres Premium ⭐.');
+    if (it.currency === 'vida') {
+      if (p.vida < it.price) return this.error(client, 'Pas assez de Vida. Recharge dans 💎 Vida.');
+      p.vida -= it.price;
+      this.store.logVida(p, -it.price, `Achat : ${it.name}`);
+    } else {
+      if (p.money < it.price) return this.error(client, 'Pas assez de Cauris.');
+      p.money -= it.price;
+    }
     p.owned.push(item);
     this.store.save();
     this.sendProfile(client);
-    this.toast(client, `Acheté : ${it.name} (−${formatMoney(it.price)})`, 'success');
+    this.toast(client, `Acheté : ${it.name} (−${formatPrice(it.price, it.currency)})`, 'success');
   },
 
   jobStart(client, { job }) {
@@ -410,7 +463,7 @@ const HANDLERS = {
     const p = client.profile;
     if (!client.zone) return;
     if (!this.nearPlace(client, 'airport')) return this.error(client, 'Va au comptoir de l\'aéroport.');
-    const price = flightPrice(client.zone, to);
+    const price = flightPrice(client.zone, to, isPremium(p, this.now()));
     if (price == null) return this.error(client, 'Destination invalide.');
     if (p.money < price) return this.error(client, 'Pas assez d\'argent pour ce billet.');
     p.money -= price;
@@ -427,6 +480,57 @@ const HANDLERS = {
       this.enterZone(client, to, AIRPORT.arrival);
       this.toast(client, `${COUNTRY_BY_CODE.get(to).flag} Bienvenue : ${COUNTRY_BY_CODE.get(to).name} !`, 'success');
     }, this.flightMs);
+  },
+
+  // --- Vida, paiements, Premium ---------------------------------------------------------
+  payInfo(client) {
+    this.send(client, 'payInfo', { methods: this.payments?.methods() ?? [] });
+  },
+
+  async payCreate(client, { pack, method }) {
+    if (!this.payments) return this.error(client, 'Paiements indisponibles.');
+    const { order, redirectUrl } = await this.payments.createOrder(client.profile, pack, method);
+    this.send(client, 'payCreated', { order: this.orderView(order), redirectUrl });
+  },
+
+  async payCheck(client, { id }) {
+    const order = this.store.getOrder(id);
+    if (!order || order.playerId !== client.profile.id) return;
+    const updated = await this.payments.confirm(id);
+    this.send(client, 'payStatus', { order: this.orderView(updated) });
+  },
+
+  receipts(client) {
+    const orders = this.store.ordersOf(client.profile.id).slice(0, 30).map((o) => this.orderView(o));
+    this.send(client, 'receipts', { orders });
+  },
+
+  premiumBuy(client) {
+    const p = client.profile;
+    const price = premiumPrice(p);
+    if (p.vida < price) return this.error(client, `Premium coûte ${formatVida(price)}. Recharge tes Vida.`);
+    const now = this.now();
+    p.vida -= price;
+    p.premium.until = Math.max(now, p.premium.until) + PREMIUM.days * 86_400_000;
+    p.premium.firstDone = true;
+    this.store.logVida(p, -price, `Premium ⭐ ${PREMIUM.days} jours`);
+    this.store.save();
+    this.sendProfile(client);
+    this.broadcastZone(client, 'pinfo', { p: this.publicInfo(client) });
+    this.toast(client, `⭐ Premium actif jusqu'au ${new Date(p.premium.until).toLocaleDateString('fr-FR')} !`, 'success');
+  },
+
+  exchange(client, { id }) {
+    const ex = EXCHANGE.find((e) => e.id === id);
+    const p = client.profile;
+    if (!ex) return this.error(client, 'Offre inconnue.');
+    if (p.vida < ex.vida) return this.error(client, 'Pas assez de Vida.');
+    p.vida -= ex.vida;
+    p.money += ex.cauris;
+    this.store.logVida(p, -ex.vida, `Change : +${formatMoney(ex.cauris)}`);
+    this.store.save();
+    this.sendProfile(client);
+    this.toast(client, `Change effectué : +${formatMoney(ex.cauris)}`, 'success');
   },
 
   // --- Familles -----------------------------------------------------------

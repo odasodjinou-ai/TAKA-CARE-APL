@@ -6,10 +6,22 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { Store } from './store.js';
 import { Game } from './game.js';
+import { createProviders } from './payments/providers.js';
+import { PaymentService } from './payments/service.js';
+import { receiptPage, sandboxPage } from './payments/pages.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.PORT) || 3000;
 const DATA_FILE = process.env.DATA_FILE || path.join(ROOT, 'data', 'db.json');
+const PUBLIC_URL = process.env.PUBLIC_URL || `http://localhost:${PORT}`;
+const MERCHANT = {
+  name: process.env.MERCHANT_NAME || 'Terra Vida',
+  address: process.env.MERCHANT_ADDRESS || '',
+  taxId: process.env.MERCHANT_TAX_ID || '', // ex. IFU au Bénin
+  support: process.env.MERCHANT_SUPPORT || 'support via le chat du jeu',
+  terms: process.env.MERCHANT_TERMS_URL || '',
+  timezone: process.env.MERCHANT_TZ || 'Africa/Porto-Novo',
+};
 
 // Préfixe d'URL -> dossier servi
 const MOUNTS = [
@@ -40,12 +52,95 @@ function resolveStatic(urlPath) {
   return null;
 }
 
+function readBody(req, limit = 64 * 1024) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks = [];
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > limit) {
+        reject(new Error('Corps trop volumineux'));
+        req.destroy();
+      } else chunks.push(c);
+    });
+    req.on('end', () => {
+      const raw = Buffer.concat(chunks).toString('utf8');
+      const type = req.headers['content-type'] ?? '';
+      try {
+        resolve(type.includes('json') ? JSON.parse(raw || '{}') : Object.fromEntries(new URLSearchParams(raw)));
+      } catch {
+        resolve({});
+      }
+    });
+    req.on('error', reject);
+  });
+}
+
+const html = (res, status, body) =>
+  res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'x-content-type-options': 'nosniff' }).end(body);
+
+/** Extrait la référence de transaction d'un webhook, propre à chaque prestataire. */
+const WEBHOOK_REF = {
+  fedapay: (b) => b?.entity?.id,
+  wave: (b) => b?.data?.id,
+  cinetpay: (b) => b?.cpm_trans_id,
+  paypal: (b) => b?.resource?.supplementary_data?.related_ids?.order_id ?? b?.resource?.id,
+};
+
+async function handlePayments(req, res, url) {
+  const [, , action, id, pathKey] = url.pathname.split('/'); // /pay/<action>/<id>[/<clé>]
+  const key = pathKey ?? url.searchParams.get('k');
+  if (url.pathname.startsWith('/receipt/')) {
+    const order = store.getOrder(url.pathname.split('/')[2]);
+    if (!payments.checkKey(order, key)) return html(res, 404, 'Reçu introuvable.');
+    return html(res, 200, receiptPage(order, MERCHANT));
+  }
+  if (action === 'return' && req.method === 'GET') {
+    const order = store.getOrder(id);
+    if (!payments.checkKey(order, key)) return html(res, 404, 'Commande introuvable.');
+    await payments.confirm(order.id);
+    res.writeHead(302, { location: `/receipt/${order.id}?k=${order.receiptKey}` }).end();
+    return;
+  }
+  if (action === 'webhook' && req.method === 'POST' && WEBHOOK_REF[id]) {
+    const body = await readBody(req);
+    const ref = WEBHOOK_REF[id](body);
+    const order = ref != null ? payments.findByProviderRef(id, ref) : null;
+    if (order) await payments.confirm(order.id); // revérifié auprès de l'API, jamais cru sur parole
+    res.writeHead(200).end('ok');
+    return;
+  }
+  if (action === 'sandbox' && providers.sandbox.enabled) {
+    const order = store.getOrder(id);
+    if (!payments.checkKey(order, key) || order.provider !== 'sandbox') return html(res, 404, 'Commande introuvable.');
+    if (req.method === 'POST') {
+      const body = await readBody(req);
+      if (body.action === 'pay') providers.sandbox.markPaid(order.id);
+      else if (order.status === 'pending') {
+        order.status = 'failed';
+        store.save();
+      }
+      res.writeHead(303, { location: `/pay/return/${order.id}/${order.receiptKey}` }).end();
+      return;
+    }
+    return html(res, 200, sandboxPage(order));
+  }
+  return html(res, 404, 'Introuvable.');
+}
+
 const server = http.createServer((req, res) => {
+  const url = new URL(req.url, 'http://localhost');
+  if (url.pathname.startsWith('/pay/') || url.pathname.startsWith('/receipt/')) {
+    handlePayments(req, res, url).catch((err) => {
+      console.error('[pay] Erreur HTTP :', err);
+      if (!res.headersSent) html(res, 500, 'Erreur serveur.');
+    });
+    return;
+  }
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     res.writeHead(405).end();
     return;
   }
-  const url = new URL(req.url, 'http://localhost');
   if (url.pathname === '/healthz') {
     res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: true, players: game.clients.size }));
     return;
@@ -77,7 +172,13 @@ const server = http.createServer((req, res) => {
 });
 
 const store = new Store(DATA_FILE);
-const game = new Game(store);
+const providers = createProviders(process.env);
+let game;
+const payments = new PaymentService(store, providers, { publicUrl: PUBLIC_URL, onPaid: (order) => game.notifyPaid(order) });
+game = new Game(store, { payments });
+const active = Object.values(providers).filter((p) => p.enabled).map((p) => p.label);
+console.log(`Paiements actifs : ${active.length ? active.join(', ') : 'aucun (configure les clés, voir README)'}`);
+if (providers.sandbox.enabled) console.warn('⚠️  Mode PAYMENTS_SANDBOX actif : paiements simulés, à ne jamais utiliser en production.');
 const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 4096 });
 
 wss.on('connection', (ws) => {

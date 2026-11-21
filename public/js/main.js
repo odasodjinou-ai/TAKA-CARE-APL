@@ -3,12 +3,15 @@
 import * as THREE from 'three';
 import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { COUNTRIES, COUNTRY_BY_CODE } from '/shared/countries.js';
-import { ITEMS, JOBS, formatMoney } from '/shared/catalog.js';
+import { JOBS, formatMoney, formatVida } from '/shared/catalog.js';
 import { PLACES, INTERACT_RADIUS, resolveCollisions } from '/shared/layout.js';
 import { Net } from './net.js';
 import { World } from './world.js';
 import { Character } from './character.js';
-import { createCar, setCarColor, spinWheels } from './vehicles.js';
+import { createCar, setCarColor, spinWheels, disposeCar, bodySpec } from './vehicles.js';
+import { Driving } from './driving.js';
+import { EngineSound } from './audio.js';
+import { VEHICLE_BY_ID } from '/shared/vehicles.js';
 import { $, h, toast, openPanel, closePanel, refreshPanel, panelOpen, PANELS, drawMinimap } from './ui.js';
 
 const CREDS_KEY = 'terravida:creds';
@@ -73,7 +76,9 @@ const me = {
   character: null,
   car: null,
   anim: 0,
+  drive: null,
 };
+const engine = new EngineSound();
 const cam = { yaw: Math.PI, pitch: 0.32, dist: 7, lastDrag: 0 };
 let cinematic = null;
 
@@ -102,6 +107,9 @@ addEventListener('keydown', (e) => {
   if (e.code === 'KeyC') togglePanel('wardrobe', '👕 Garde-robe');
   if (e.code === 'KeyG') togglePanel('family', '👨‍👩‍👧 Famille');
   if (e.code === 'KeyH') togglePanel('help', '❔ Aide');
+  if (e.code === 'KeyP') togglePanel('vida');
+  if (e.code === 'KeyB' && me.inCar) engine.horn();
+  if (e.code === 'KeyM') toast(engine.toggleMute() ? '🔇 Son coupé' : '🔊 Son activé');
   if (e.code === 'Space') e.preventDefault();
 });
 addEventListener('keyup', (e) => keys.delete(e.code));
@@ -173,6 +181,7 @@ const PANEL_TITLES = {
   wardrobe: '👕 Garde-robe',
   family: '👨‍👩‍👧 Famille',
   help: '❔ Aide',
+  vida: '💎 Vida & Premium',
 };
 
 function togglePanel(id, title = PANEL_TITLES[id]) {
@@ -201,12 +210,60 @@ function interact() {
   if (p) togglePanel(p.id);
 }
 
+/** Place un personnage sur la selle (moto) ou le rend au monde. */
+function mount(character, car) {
+  if (car?.userData.moto) {
+    car.userData.body.add(character.group);
+    character.group.position.set(0, car.userData.seat.y - 0.92, car.userData.seat.z);
+    character.group.rotation.set(0, 0, 0);
+    character.sit(true);
+    character.group.visible = true;
+  } else {
+    character.sit(false);
+    character.group.visible = !car;
+  }
+}
+
+function unmount(character, parent) {
+  if (character.group.parent !== parent) parent.add(character.group);
+  character.sit(false);
+  character.group.visible = true;
+}
+
 function makeMyCar() {
   const s = game.profile.skin;
-  if (me.car) scene.remove(me.car);
+  if (me.car) {
+    unmount(me.character, scene);
+    scene.remove(me.car);
+    disposeCar(me.car);
+  }
   me.car = createCar(s.car, s.carColor);
   me.car.visible = me.inCar;
+  me.drive = new Driving(me.car.userData.vehicle, bodySpec(me.car.userData.vehicle.body).wb);
+  // Phares : un vrai projecteur pour son propre véhicule (allumé la nuit)
+  const beam = new THREE.SpotLight('#fff4d6', 0, 70, 0.55, 0.5, 1.2);
+  beam.position.set(0, 0.9, bodySpec(me.car.userData.vehicle.body).L / 2);
+  beam.target.position.set(0, 0, 25);
+  me.car.add(beam, beam.target);
+  me.car.userData.beam = beam;
   scene.add(me.car);
+  if (me.inCar) mount(me.character, me.car);
+}
+
+/** Collision d'un véhicule allongé : plusieurs cercles répartis sur sa longueur. */
+function collideVehicle(pos, heading, L, W) {
+  const r = W / 2 + 0.1;
+  const fx = Math.sin(heading);
+  const fz = Math.cos(heading);
+  const n = Math.max(1, Math.round((L - W) / (W * 0.9)));
+  let push = { x: 0, z: 0 };
+  for (let i = 0; i <= n; i++) {
+    const off = -L / 2 + W / 2 + ((L - W) * i) / n;
+    const c = { x: pos.x + push.x + fx * off, z: pos.z + push.z + fz * off };
+    const moved = resolveCollisions({ ...c }, r, world.layout.colliders);
+    push = { x: push.x + moved.x - c.x, z: push.z + moved.z - c.z };
+  }
+  return push;
 }
 
 function toggleCar() {
@@ -214,7 +271,8 @@ function toggleCar() {
   if (me.inCar) {
     me.inCar = false;
     me.car.visible = false;
-    me.character.group.visible = true;
+    unmount(me.character, scene);
+    engine.stop();
     // On sort par la portière gauche
     const left = new THREE.Vector3(Math.cos(me.yaw), 0, -Math.sin(me.yaw)).multiplyScalar(-2.2);
     const p = resolveCollisions({ x: me.pos.x + left.x, z: me.pos.z + left.z }, 0.45, world.layout.colliders);
@@ -222,12 +280,17 @@ function toggleCar() {
     me.carSpeed = 0;
     net.send('car', { on: false });
   } else {
+    const v = VEHICLE_BY_ID.get(game.profile.skin.car);
+    if (v?.premiumOnly && !game.profile.premium?.active) return toast(`${v.name} est réservé aux membres ⭐ Premium.`, 'warn');
     if (!me.car || me.car.userData.model !== game.profile.skin.car) makeMyCar();
-    const p = resolveCollisions({ x: me.pos.x, z: me.pos.z }, 1.8, world.layout.colliders);
-    me.pos.set(p.x, 0, p.z);
+    const spec = bodySpec(v.body);
+    const push = collideVehicle(me.pos, me.yaw, spec.L, spec.W);
+    me.pos.set(me.pos.x + push.x, 0, me.pos.z + push.z);
     me.inCar = true;
+    me.drive.reset(me.yaw);
     me.car.visible = true;
-    me.character.group.visible = false;
+    mount(me.character, me.car);
+    engine.start(v.electric);
     net.send('car', { on: true });
   }
 }
@@ -266,7 +329,7 @@ class Remote {
     this.info = info;
     this.character.setSkin(info.skin);
     const job = info.job ? JOBS[info.job]?.icon ?? '' : '';
-    const lines = [h('div', {}, h('b', {}, info.name), job ? h('span', { class: 'job' }, ` ${job}`) : null)];
+    const lines = [h('div', {}, info.premium ? h('span', { class: 'premium' }, '⭐ ') : null, h('b', {}, info.name), job ? h('span', { class: 'job' }, ` ${job}`) : null)];
     if (info.family) lines.push(h('div', { class: 'fam' }, `« ${info.family} »`));
     this.tagEl.replaceChildren(...lines);
     if (this.car) this.setCar(this.veh, true);
@@ -276,15 +339,17 @@ class Remote {
     if (model === this.veh && !force) return;
     this.veh = model;
     if (this.car) {
+      unmount(this.character, this.group);
       this.group.remove(this.car);
+      disposeCar(this.car);
       this.car = null;
     }
     if (model) {
       this.car = createCar(model, this.info.skin.carColor);
       this.group.add(this.car);
+      mount(this.character, this.car);
     }
-    this.character.group.visible = !model;
-    this.tag.position.y = model ? 2.6 : 2.25;
+    this.tag.position.y = model ? (model === 'savane-bus' ? 3.6 : 2.6) : 2.25;
   }
 
   push(s) {
@@ -315,6 +380,7 @@ class Remote {
     if (this.car) {
       this.car.rotation.y = this.ry;
       spinWheels(this.car, this.vel * dt);
+      if (this.car.userData.moto) this.car.userData.body.rotation.z = THREE.MathUtils.clamp(lerpAngle(0, c.ry - a.ry, 1) * 4, -0.5, 0.5);
     } else {
       this.character.group.rotation.y = this.ry;
       this.character.animate(dt, this.vel, this.pos.y > 0.05);
@@ -324,6 +390,7 @@ class Remote {
   dispose() {
     scene.remove(this.group);
     this.tagEl.remove();
+    if (this.car) disposeCar(this.car);
     this.character.dispose();
   }
 }
@@ -339,7 +406,9 @@ let sendTimer = 0;
 let completeTimer = 0;
 let hudTimer = 0;
 
+const speedo = $('#speedo');
 function updatePlayer(dt) {
+  speedo.classList.toggle('hidden', !me.inCar);
   const fwd = (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) - (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0) + joy.y;
   const side = (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) - (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0) + joy.x;
   const colliders = world.layout.colliders;
@@ -376,27 +445,29 @@ function updatePlayer(dt) {
     me.character.animate(dt, me.speed, !me.onGround);
     me.anim = me.speed > 5 ? 2 : me.speed > 0.3 ? 1 : 0;
   } else {
-    const max = ITEMS[`car:${game.profile.skin.car}`]?.speed ?? 26;
+    const d = me.drive;
     const throttle = blocked ? 0 : THREE.MathUtils.clamp(fwd, -1, 1);
-    if (throttle > 0) me.carSpeed += (me.carSpeed < 0 ? 30 : 11) * throttle * dt;
-    else if (throttle < 0) me.carSpeed += (me.carSpeed > 0 ? 30 : 7) * throttle * dt;
-    else me.carSpeed -= Math.sign(me.carSpeed) * Math.min(Math.abs(me.carSpeed), 4 * dt);
-    if (keys.has('Space')) me.carSpeed -= Math.sign(me.carSpeed) * Math.min(Math.abs(me.carSpeed), 25 * dt);
-    me.carSpeed = THREE.MathUtils.clamp(me.carSpeed, -8, max);
     const steer = blocked ? 0 : THREE.MathUtils.clamp(side, -1, 1);
-    const grip = Math.min(1, Math.abs(me.carSpeed) / 6);
-    me.yaw -= steer * 1.9 * grip * Math.sign(me.carSpeed) * dt;
+    const { dx, dz } = d.update(dt, { throttle, steer, handbrake: keys.has('Space') && !blocked });
+    me.yaw = d.heading;
     const before = { x: me.pos.x, z: me.pos.z };
-    me.pos.x += Math.sin(me.yaw) * me.carSpeed * dt;
-    me.pos.z += Math.cos(me.yaw) * me.carSpeed * dt;
-    const p = resolveCollisions({ x: me.pos.x, z: me.pos.z }, 1.7, colliders);
-    const pushed = Math.hypot(p.x - me.pos.x, p.z - me.pos.z);
-    if (pushed > 0.02) me.carSpeed *= 0.6; // choc
-    me.pos.set(p.x, 0, p.z);
+    me.pos.x += dx;
+    me.pos.z += dz;
+    const spec = bodySpec(d.v.body);
+    const push = collideVehicle(me.pos, me.yaw, spec.L, spec.W);
+    const pushed = Math.hypot(push.x, push.z);
+    if (pushed > 0.01) d.impact(Math.min(1, pushed / Math.max(0.01, Math.hypot(dx, dz))));
+    me.pos.set(me.pos.x + push.x, 0, me.pos.z + push.z);
     me.speed = Math.hypot(me.pos.x - before.x, me.pos.z - before.z) / Math.max(dt, 1e-4);
     me.car.position.copy(me.pos);
     me.car.rotation.y = me.yaw;
-    spinWheels(me.car, me.carSpeed * dt);
+    const body = me.car.userData.body;
+    if (me.car.userData.moto) body.rotation.set(0, 0, d.lean);
+    else body.rotation.set(d.pitch, 0, d.roll);
+    spinWheels(me.car, d.vf * dt, d.steer);
+    engine.update(d.rpm, Math.max(0, throttle));
+    speedo.textContent = `${d.kmh} km/h · ${d.gear < 0 ? 'R' : d.kmh < 2 && throttle === 0 ? 'N' : d.gear}`;
+    me.car.userData.beam.intensity = world.night ? 60 : 0;
     me.anim = 3;
     // La caméra se replace derrière la voiture si on ne la manipule pas
     if (performance.now() - cam.lastDrag > 1500) cam.yaw = lerpAngle(cam.yaw, me.yaw + Math.PI, Math.min(1, dt * 2.5));
@@ -475,6 +546,7 @@ function updateHud() {
   if (!p) return;
   $('#hud-name').textContent = `${p.name}${p.family ? ` · « ${p.family.name} »` : ''}`;
   $('#hud-money').textContent = formatMoney(p.money);
+  $('#hud-vida').textContent = `💎 ${formatVida(p.vida ?? 0)}${p.premium?.active ? ' · ⭐ Premium' : ''}`;
   const c = COUNTRY_BY_CODE.get(game.country ?? p.country);
   $('#hud-country').textContent = c ? `${c.flag} ${c.name}${game.room ? ` · ${game.room.name}` : ''}` : '';
   $('#hud-clock').textContent = `🕒 ${World.clockString()}`;
@@ -632,7 +704,8 @@ net.on('zone', (m) => {
   me.inCar = false;
   me.carSpeed = 0;
   if (me.car) me.car.visible = false;
-  me.character.group.visible = true;
+  unmount(me.character, scene);
+  engine.stop();
   camera.position.set(me.pos.x, 8, me.pos.z + 10);
   game.mission = null;
   world.setMissionTarget(null);
@@ -662,6 +735,8 @@ net.on('profile', (m) => {
   if (old && me.car && (old.skin.car !== m.profile.skin.car || old.skin.carColor !== m.profile.skin.carColor)) {
     if (old.skin.car !== m.profile.skin.car) {
       makeMyCar();
+      me.drive.reset(me.yaw);
+      if (me.inCar) engine.start(me.car.userData.vehicle.electric);
       me.car.position.copy(me.pos);
       me.car.rotation.y = me.yaw;
     } else setCarColor(me.car, m.profile.skin.carColor);
@@ -681,7 +756,8 @@ net.on('flight', (m) => {
   if (me.inCar) {
     me.inCar = false;
     me.car.visible = false;
-    me.character.group.visible = true;
+    unmount(me.character, scene);
+    engine.stop();
   }
   game.mission = null;
   world.setMissionTarget(null);
@@ -700,9 +776,48 @@ net.on('chat', (m) => {
 net.on('familyInvite', (m) => {
   toast(`${m.from} t'invite dans la famille « ${m.name} »`, 'info', { label: 'Accepter', fn: () => net.send('familyAccept', { familyId: m.familyId }) });
 });
+// Paiements
+const payState = () => (game.pay ??= { tab: 'buy', pack: 'vida-260', method: null, methods: null, receipts: null, pending: null });
+let payPoll = null;
+net.on('payInfo', (m) => {
+  const pay = payState();
+  pay.methods = m.methods;
+  pay.method ??= m.methods.find((x) => x.enabled)?.id ?? null;
+  if (panelOpen() === 'vida') refreshPanel();
+});
+net.on('payCreated', (m) => {
+  const pay = payState();
+  pay.pending = { order: m.order, redirectUrl: m.redirectUrl };
+  if (pay.window && !pay.window.closed) pay.window.location.href = m.redirectUrl;
+  else window.open(m.redirectUrl, '_blank', 'noopener');
+  pay.window = null;
+  clearInterval(payPoll);
+  const started = Date.now();
+  payPoll = setInterval(() => {
+    if (pay.pending?.order.status !== 'pending' || Date.now() - started > 15 * 60_000) return clearInterval(payPoll);
+    net.send('payCheck', { id: m.order.id });
+  }, 6000);
+  if (panelOpen() === 'vida') refreshPanel();
+});
+const onOrder = (m) => {
+  const pay = payState();
+  if (pay.pending?.order.id === m.order.id) pay.pending.order = m.order;
+  if (pay.receipts) pay.receipts = pay.receipts.map((o) => (o.id === m.order.id ? m.order : o));
+  if (panelOpen() === 'vida') refreshPanel();
+};
+net.on('payStatus', onOrder);
+net.on('paid', onOrder);
+net.on('receipts', (m) => {
+  payState().receipts = m.orders;
+  if (panelOpen() === 'vida') refreshPanel();
+});
 net.on('toast', (m) => toast(m.message, m.kind));
 net.on('error', (m) => {
   toast(m.message, 'error');
+  if (game.pay?.window) {
+    game.pay.window.close(); // l'onglet ouvert pour le paiement ne sert plus
+    game.pay.window = null;
+  }
   if ($('#login-status').textContent) $('#login-status').textContent = '';
 });
 net.on('kicked', (m) => {
@@ -714,7 +829,11 @@ net.on('kicked', (m) => {
 });
 
 // Outils de test automatisé (uniquement avec ?debug dans l'URL)
-if (new URLSearchParams(location.search).has('debug')) window.__terra = { game, me, world };
+if (new URLSearchParams(location.search).has('debug')) {
+  window.__terra = { game, me, world, scene, camera };
+  const hour = new URLSearchParams(location.search).get('hour');
+  if (hour) World.hourOverride = Number(hour);
+}
 
 // --- Démarrage ---------------------------------------------------------------------------
 world.build(COUNTRY_BY_CODE.has(guess) ? guess : 'FR');

@@ -5,7 +5,8 @@ import { Sky } from 'three/addons/objects/Sky.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { getLayout, makeHeightFn, ROAD_LINES, WORLD, PLACES, AIRPORT, mulberry32 } from '/shared/layout.js';
 import { COUNTRY_BY_CODE } from '/shared/countries.js';
-import { createCar, createPlane, spinWheels } from './vehicles.js';
+import { createCar, createPlane, spinWheels, disposeCar, setLights } from './vehicles.js';
+import { VEHICLES } from '/shared/vehicles.js';
 
 const DAY_SECONDS = 24 * 60; // une journée = 24 minutes réelles
 
@@ -195,6 +196,8 @@ export class World {
     this.scene = scene;
     this.root = new THREE.Group();
     scene.add(this.root);
+    this.trafficGroup = new THREE.Group(); // véhicules : matériaux partagés, libérés à part
+    scene.add(this.trafficGroup);
     this.pmrem = new THREE.PMREMGenerator(renderer);
     this.envTimer = 0;
     this.nightMaterials = [];
@@ -513,10 +516,13 @@ export class World {
 
     // Circulation (voitures PNJ)
     const r2 = mulberry32(layout.seed ^ 0x5151);
-    const palette = ['#f8fafc', '#111827', '#9ca3af', '#dc2626', '#2563eb', '#16a34a', '#facc15', '#7c3aed'];
-    const models = ['citadine', 'citadine', 'suv', 'pickup', 'sport'];
-    for (let i = 0; i < 16; i++) {
-      const car = add(createCar(models[Math.floor(r2() * models.length)], palette[Math.floor(r2() * palette.length)]));
+    const palette = ['#f8fafc', '#111827', '#9ca3af', '#dc2626', '#2563eb', '#16a34a', '#facc15', '#7c3aed', '#0f766e', '#78350f'];
+    // Trafic réaliste : surtout des citadines, berlines, SUV, taxis et motos ; quelques bus et camions
+    const common = VEHICLES.filter((v) => v.currency === 'cauris' && !['bus', 'truck', 'super'].includes(v.body));
+    const models = [...common.map((v) => v.id), 'savane-taxi', 'savane-taxi', 'savane-zem', 'savane-zem', 'savane-bus', 'liberty-box'];
+    for (let i = 0; i < 18; i++) {
+      const car = createCar(models[Math.floor(r2() * models.length)], palette[Math.floor(r2() * palette.length)]);
+      this.trafficGroup.add(car);
       const line = ROAD_LINES[Math.floor(r2() * ROAD_LINES.length)];
       const alongX = r2() < 0.5;
       const dir = r2() < 0.5 ? 1 : -1;
@@ -534,6 +540,10 @@ export class World {
   }
 
   clear() {
+    for (const c of [...this.trafficGroup.children]) {
+      this.trafficGroup.remove(c);
+      disposeCar(c);
+    }
     for (const c of [...this.root.children]) {
       this.root.remove(c);
       c.traverse((o) => {
@@ -554,6 +564,7 @@ export class World {
 
   /** Heure du jour partagée entre tous les joueurs (dérivée de l'horloge). 0 = minuit. */
   static dayFraction() {
+    if (World.hourOverride != null) return World.hourOverride / 24;
     return ((Date.now() / 1000) % DAY_SECONDS) / DAY_SECONDS;
   }
 
@@ -584,6 +595,8 @@ export class World {
     const night = 1 - day;
     for (const m of this.nightMaterials) m.emissiveIntensity = night * 1.4;
     if (this.lampMat) this.lampMat.emissiveIntensity = night * 3;
+    this.night = night > 0.5;
+    setLights(this.night);
 
     this.envTimer -= 1;
     if (force || this.envTimer <= 0) {

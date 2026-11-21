@@ -152,7 +152,7 @@ test('boutique : achat sur place uniquement, argent débité, puis équipement',
   assert.ok(a.c.profile.owned.includes('hat:cowboy'));
   assert.equal(a.c.profile.money, STARTING_MONEY - 400);
   a.send('buy', { item: 'hat:crown' });
-  assert.match(last(a.ws, 'error').message, /argent/);
+  assert.match(last(a.ws, 'error').message, /Vida/);
   a.send('skin', { skin: { ...a.c.profile.skin, hat: 'cowboy' } });
   assert.equal(a.c.profile.skin.hat, 'cowboy');
 });

@@ -132,6 +132,16 @@ export class Character {
     }
   }
 
+  /** Pose assise (conduite d'une moto). */
+  sit(on) {
+    this.sitting = on;
+    this.legL.rotation.set(on ? -1.35 : 0, 0, on ? 0.18 : 0);
+    this.legR.rotation.set(on ? -1.35 : 0, 0, on ? -0.18 : 0);
+    this.armL.rotation.set(on ? -1.0 : 0, 0, on ? 0.15 : -0.08);
+    this.armR.rotation.set(on ? -1.0 : 0, 0, on ? -0.15 : 0.08);
+    this.body.position.y = 0;
+  }
+
   /**
    * @param {number} dt secondes
    * @param {number} speed vitesse horizontale (m/s)
