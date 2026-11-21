@@ -92,3 +92,81 @@ export class EngineSound {
     }
   }
 }
+
+/** Petite musique synthétisée (pour les maisons où la musique est allumée). */
+export class MusicBox {
+  constructor(engine) {
+    this.engine = engine; // partage le contexte audio
+    this.gain = null;
+    this.step = 0;
+    this.timer = null;
+  }
+
+  setVolume(v) {
+    const ctx = this.engine.ctx;
+    if (!ctx || this.engine.muted) v = 0;
+    if (!ctx) return;
+    if (!this.gain) {
+      this.gain = ctx.createGain();
+      this.gain.gain.value = 0;
+      this.gain.connect(ctx.destination);
+    }
+    this.gain.gain.setTargetAtTime(v, ctx.currentTime, 0.2);
+    if (v > 0 && !this.timer) this.timer = setInterval(() => this.tick(), 250); // 120 BPM, croches
+    if (v === 0 && this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+  }
+
+  tick() {
+    const ctx = this.engine.ctx;
+    const t = ctx.currentTime;
+    const scale = [261.6, 293.7, 329.6, 392, 440, 523.3]; // pentatonique
+    const pattern = [0, 2, 4, 2, 5, 4, 2, 3, 0, 2, 4, 5, 4, 2, 1, 0];
+    const note = scale[pattern[this.step % pattern.length]];
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.type = 'triangle';
+    o.frequency.value = note;
+    g.gain.setValueAtTime(0.5, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
+    o.connect(g).connect(this.gain);
+    o.start(t);
+    o.stop(t + 0.25);
+    if (this.step % 2 === 0) {
+      // grosse caisse
+      const k = ctx.createOscillator();
+      const kg = ctx.createGain();
+      k.frequency.setValueAtTime(120, t);
+      k.frequency.exponentialRampToValueAtTime(40, t + 0.15);
+      kg.gain.setValueAtTime(0.9, t);
+      kg.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+      k.connect(kg).connect(this.gain);
+      k.start(t);
+      k.stop(t + 0.2);
+    }
+    this.step++;
+  }
+}
+
+/** Sirène d'alarme (2 s). */
+export function siren(engine) {
+  engine.ensure();
+  const ctx = engine.ctx;
+  if (!ctx || engine.muted) return;
+  const t = ctx.currentTime;
+  const o = ctx.createOscillator();
+  const g = ctx.createGain();
+  o.type = 'sawtooth';
+  for (let i = 0; i < 4; i++) {
+    o.frequency.setValueAtTime(650, t + i * 0.5);
+    o.frequency.linearRampToValueAtTime(1100, t + i * 0.5 + 0.25);
+    o.frequency.linearRampToValueAtTime(650, t + i * 0.5 + 0.5);
+  }
+  g.gain.setValueAtTime(0.08, t);
+  g.gain.setTargetAtTime(0, t + 1.9, 0.05);
+  o.connect(g).connect(ctx.destination);
+  o.start(t);
+  o.stop(t + 2.1);
+}

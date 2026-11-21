@@ -24,7 +24,10 @@ import { normalizePhone, maskPhone } from './auth/otp.js';
 import { moderate, isOffensiveName, addStrike, mutedUntil, SANCTIONS } from './moderation.js';
 import crypto from 'node:crypto';
 import { ADMIN_HANDLERS, AdminMixin, parseAdminPhones, isBanned } from './admin.js';
-import { HOUSE_TIERS, LOT_BY_ID, MAX_HOUSES_PER_FAMILY, SELL_REFUND, HOME_COOLDOWN_MS, DEFAULT_HOUSE_COLORS, houseKey } from '../shared/houses.js';
+import {
+  HOUSE_TIERS, LOT_BY_ID, MAX_HOUSES_PER_FAMILY, SELL_REFUND, HOME_COOLDOWN_MS, DEFAULT_HOUSE_COLORS, DEFAULT_DEVICES, houseKey,
+  devicesFor, lotAt, BUTTON_RADIUS, GARAGE_RADIUS, NO_GARAGE_BODIES,
+} from '../shared/houses.js';
 
 export const ROOMS = [
   { id: 'afrique-1', name: 'Afrique #1', max: 40 },
@@ -96,6 +99,7 @@ export class Game {
 
   disconnect(client) {
     if (!this.clients.has(client)) return;
+    if (client.borrowed) HANDLERS.car.call(this, client, { on: false }); // l'emprunt retourne au garage
     this.leaveRoom(client);
     if (client.flightTimer) clearTimeout(client.flightTimer);
     this.clients.delete(client);
@@ -295,7 +299,54 @@ export class Game {
 
   // --- Maisons ---------------------------------------------------------------------
   housesView(country) {
-    return this.store.housesIn(country).map((h) => ({ lot: h.lot, family: this.store.getFamily(h.familyId)?.name ?? '?', familyId: h.familyId, wall: h.wall, roof: h.roof }));
+    return this.store.housesIn(country).map((h) => ({
+      lot: h.lot,
+      family: this.store.getFamily(h.familyId)?.name ?? '?',
+      familyId: h.familyId,
+      wall: h.wall,
+      roof: h.roof,
+      devices: { ...DEFAULT_DEVICES, ...h.devices },
+      garage: (h.garage ?? []).map((c) => (c ? { model: c.model, color: c.color, owner: c.ownerName } : null)),
+    }));
+  }
+
+  /** Maison de la famille du joueur sur ce terrain (pays courant), ou null. */
+  familyHouse(client, lotId, country = client.zone) {
+    const h = this.store.data.houses[houseKey(country, lotId)];
+    return h && client.profile.familyId && h.familyId === client.profile.familyId ? h : null;
+  }
+
+  /** Le véhicule personnel du joueur est-il garé dans un garage familial ? */
+  parkedCar(profile) {
+    if (!profile.familyId) return false;
+    return this.store.housesOf(profile.familyId).some((h) => (h.garage ?? []).some((c) => c && c.ownerId === profile.id && c.model === profile.skin.car));
+  }
+
+  /** Note un événement (visite, alarme…) dans le journal de la maison. */
+  houseEvent(house, event) {
+    house.events = [{ at: this.now(), ...event }, ...(house.events ?? [])].slice(0, 30);
+  }
+
+  /** Détection des visiteurs par les caméras et l'alarme (appelée à chaque position reçue). */
+  checkIntrusion(client) {
+    const lot = lotAt(client.pos.x, client.pos.z);
+    if (!lot) return;
+    const h = this.store.data.houses[houseKey(client.zone, lot.id)];
+    if (!h || h.familyId === client.profile.familyId) return;
+    const key = `${client.zone}:${lot.id}:${client.profile.id}`;
+    const now = this.now();
+    this.intrusions ??= new Map();
+    if (now - (this.intrusions.get(key) ?? 0) < 60_000) return;
+    this.intrusions.set(key, now);
+    const alarm = !!h.devices?.alarm;
+    this.houseEvent(h, { kind: alarm ? 'alarm' : 'visit', name: client.profile.name });
+    const fam = this.store.getFamily(h.familyId);
+    for (const id of fam?.members ?? []) {
+      const c = this.findOnline(id);
+      if (c) this.toast(c, alarm ? `🚨 ALARME : ${client.profile.name} est entré chez vous (maison n°${lot.id}) !` : `📷 Caméra : ${client.profile.name} est devant votre maison n°${lot.id}.`, alarm ? 'error' : 'info');
+    }
+    if (alarm) this.send(client, 'alarm', { lot: lot.id, family: fam?.name });
+    this.store.save();
   }
 
   /** Terrain de la maison familiale du joueur dans ce pays (ou null). */
@@ -487,6 +538,7 @@ const HANDLERS = {
     client.pos.y = clamp(y, 0, 12);
     client.pos.ry = ry;
     client.anim = Number.isInteger(a) ? clamp(a, 0, 3) : 0;
+    this.checkIntrusion(client);
   },
 
   chat(client, { text, ch }) {
@@ -555,6 +607,21 @@ const HANDLERS = {
 
   car(client, { on }) {
     if (!client.zone) return;
+    if (!on && client.borrowed) {
+      // Véhicule emprunté au garage familial : il y retourne automatiquement
+      const b = client.borrowed;
+      client.borrowed = null;
+      const h = this.store.data.houses[b.house];
+      const free = h?.garage?.findIndex((x) => !x) ?? -1;
+      if (h && free !== -1) h.garage[free] = b.car;
+      else if (h && h.garage.length < HOUSE_TIERS[LOT_BY_ID.get(b.lot).tier].garageSlots) h.garage.push(b.car);
+      client.veh = null;
+      this.store.save();
+      this.broadcastHouses(b.house.split(':')[0]);
+      return this.toast(client, '🚗 Le véhicule emprunté est retourné au garage familial.');
+    }
+    if (on && this.parkedCar(client.profile)) return this.error(client, '🚗 Ton véhicule est garé à la maison : va le chercher au garage.');
+    if (on && client.borrowed) return;
     const v = VEHICLE_BY_ID.get(client.profile.skin.car);
     if (on && v?.premiumOnly && !isPremium(client.profile, this.now())) {
       return this.error(client, `${v.name} est réservé aux membres Premium ⭐.`);
@@ -744,6 +811,12 @@ const HANDLERS = {
 
   familyLeave(client) {
     if (!client.profile.familyId) return;
+    // Ses véhicules garés chez la famille lui reviennent
+    for (const h of this.store.housesOf(client.profile.familyId)) {
+      const rec = this.store.data.houses[h.key];
+      rec.garage = (rec.garage ?? []).map((c) => (c && c.ownerId === client.profile.id ? null : c));
+      this.broadcastHouses(h.country);
+    }
     const fam = this.store.removeFromFamily(client.profile);
     this.sendProfile(client);
     this.broadcastZone(client, 'pinfo', { p: this.publicInfo(client) });
@@ -795,7 +868,7 @@ const HANDLERS = {
     if (fam.treasury < price) return this.error(client, `Il manque ${formatMoney(price - fam.treasury)} dans la cagnotte familiale.`);
     fam.treasury -= price;
     this.store.logTreasury(fam, -price, `Achat : ${HOUSE_TIERS[lot.tier].name} n°${lot.id} (${client.zone})`);
-    this.store.data.houses[key] = { familyId: fam.id, boughtAt: this.now(), price, ...DEFAULT_HOUSE_COLORS };
+    this.store.data.houses[key] = { familyId: fam.id, boughtAt: this.now(), price, ...DEFAULT_HOUSE_COLORS, devices: { ...DEFAULT_DEVICES }, garage: [], events: [] };
     this.store.save();
     this.broadcastHouses(client.zone);
     this.refreshFamily(fam);
@@ -831,6 +904,85 @@ const HANDLERS = {
     h.roof = roof.toLowerCase();
     this.store.save();
     this.broadcastHouses(client.zone);
+  },
+
+  /** Appareil connecté. via 'phone' : à distance (n'importe où) ; via 'button' : interrupteur sur place. */
+  houseDevice(client, { country, lot: lotId, device, via }) {
+    const zone = via === 'phone' ? country : client.zone;
+    const lot = LOT_BY_ID.get(lotId);
+    const h = lot && this.store.data.houses[houseKey(zone, lotId)];
+    if (!h) return this.error(client, 'Maison introuvable.');
+    if (!devicesFor(lot.tier).some((d) => d.id === device)) return this.error(client, 'Appareil inconnu.');
+    if (via === 'button') {
+      const b = lot.buttons.find((x) => x.device === device);
+      if (distance2D(client.pos, b) > BUTTON_RADIUS + 1) return this.error(client, 'Trop loin de l\'interrupteur.');
+    }
+    if (h.familyId !== client.profile.familyId) {
+      if (via === 'button') this.houseEvent(h, { kind: 'button', name: client.profile.name });
+      return this.error(client, '🔒 Accès refusé : cet appareil appartient à une autre famille.');
+    }
+    h.devices = { ...DEFAULT_DEVICES, ...h.devices, [device]: !h.devices?.[device] };
+    this.store.save();
+    this.broadcastHouses(zone);
+    if (via === 'phone' && client.zone !== zone) this.send(client, 'houses', { country: zone, houses: this.housesView(zone), remote: true });
+  },
+
+  /** État des maisons d'un pays (pour piloter à distance une maison située dans un autre pays). */
+  housesFor(client, { country }) {
+    if (!isCountry(country)) return;
+    this.send(client, 'houses', { country, houses: this.housesView(country), remote: country !== client.zone });
+  },
+
+  /** Journal des caméras / alarme d'une maison de la famille. */
+  houseEvents(client, { country, lot: lotId }) {
+    const h = this.familyHouse(client, lotId, country);
+    if (!h) return this.error(client, 'Maison introuvable.');
+    this.send(client, 'houseEvents', { country, lot: lotId, events: h.events ?? [] });
+  },
+
+  /** Gare le véhicule conduit dans le garage familial. */
+  garagePark(client, { lot: lotId }) {
+    const lot = LOT_BY_ID.get(lotId);
+    const h = lot && this.familyHouse(client, lotId);
+    if (!h) return this.error(client, 'Ce garage n\'est pas à ta famille.');
+    if (!client.veh) return this.error(client, 'Tu dois être au volant pour garer un véhicule.');
+    if (distance2D(client.pos, { x: lot.garage.x, z: lot.garage.doorFront }) > GARAGE_RADIUS) return this.error(client, 'Approche-toi du garage.');
+    if (NO_GARAGE_BODIES.includes(VEHICLE_BY_ID.get(client.veh)?.body)) return this.error(client, 'Ce véhicule est trop grand pour le garage.');
+    h.garage ??= [];
+    const cap = HOUSE_TIERS[lot.tier].garageSlots;
+    let slot = h.garage.findIndex((x) => !x);
+    if (slot === -1) {
+      if (h.garage.length >= cap) return this.error(client, `Garage plein (${cap} place(s)).`);
+      slot = h.garage.length;
+    }
+    const car = client.borrowed?.car ?? { model: client.veh, color: client.profile.skin.carColor, ownerId: client.profile.id, ownerName: client.profile.name };
+    h.garage[slot] = car;
+    client.borrowed = null;
+    client.veh = null;
+    this.store.save();
+    this.broadcastHouses(client.zone);
+    this.send(client, 'carParked', {});
+    this.toast(client, `🅿️ Véhicule garé (place ${slot + 1}/${cap}).`, 'success');
+  },
+
+  /** Sort un véhicule du garage familial (le sien ou celui d'un membre : emprunt). */
+  garageTake(client, { lot: lotId, slot }) {
+    const lot = LOT_BY_ID.get(lotId);
+    const h = lot && this.familyHouse(client, lotId);
+    if (!h) return this.error(client, 'Ce garage n\'est pas à ta famille.');
+    if (client.veh) return this.error(client, 'Gare d\'abord le véhicule que tu conduis.');
+    if (distance2D(client.pos, { x: lot.garage.x, z: lot.garage.doorFront }) > GARAGE_RADIUS) return this.error(client, 'Approche-toi du garage.');
+    const car = h.garage?.[slot];
+    if (!car) return this.error(client, 'Place vide.');
+    h.garage[slot] = null;
+    while (h.garage.length && !h.garage.at(-1)) h.garage.pop();
+    const own = car.ownerId === client.profile.id && car.model === client.profile.skin.car;
+    client.borrowed = own ? null : { car, house: houseKey(client.zone, lotId), lot: lotId };
+    client.veh = car.model;
+    if (!h.devices?.garage) h.devices = { ...DEFAULT_DEVICES, ...h.devices, garage: true }; // la porte s'ouvre
+    this.store.save();
+    this.broadcastHouses(client.zone);
+    this.send(client, 'carTaken', { model: car.model, color: car.color, borrowed: !own, owner: car.ownerName });
   },
 
   houseHome(client) {

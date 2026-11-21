@@ -546,14 +546,17 @@ export class World {
     const lawn = new THREE.MeshStandardMaterial({ color: biome === 'desert' ? '#b9a66a' : biome === 'snow' ? '#e2e8f0' : '#5e9a3c', roughness: 1 });
     const hedge = new THREE.MeshStandardMaterial({ color: '#2f6b2a', roughness: 0.95 });
     const paving = new THREE.MeshStandardMaterial({ color: '#cbd5e1', roughness: 0.8 });
+    const asphalt = new THREE.MeshStandardMaterial({ color: '#4b5563', roughness: 0.9 });
     const wood = new THREE.MeshStandardMaterial({ color: '#6b3f1f', roughness: 0.7 });
-    const glass = new THREE.MeshPhysicalMaterial({ color: '#1e3a5f', roughness: 0.05, metalness: 0.4, clearcoat: 1 });
     const white = new THREE.MeshStandardMaterial({ color: '#f8fafc', roughness: 0.6 });
-    const water = new THREE.MeshPhysicalMaterial({ color: '#22b8e6', roughness: 0.05, clearcoat: 1, transparent: true, opacity: 0.9 });
-    const mesh = (geo, mat, x, y, z, group) => {
+    const dark = new THREE.MeshStandardMaterial({ color: '#1f2937', roughness: 0.4, metalness: 0.5 });
+    const lens = new THREE.MeshStandardMaterial({ color: '#0b0b0b', roughness: 0.05, metalness: 0.9 });
+    const led = new THREE.MeshStandardMaterial({ color: '#7f1d1d', emissive: '#ef4444', emissiveIntensity: 2 });
+    const BTN_COLORS = { lights: '#facc15', music: '#a855f7', alarm: '#ef4444', garage: '#0ea5e9', pool: '#22d3ee' };
+    const mesh = (geo, mat, x, y, z, group, shadow = true) => {
       const m = new THREE.Mesh(geo, mat);
       m.position.set(x, y, z);
-      m.castShadow = true;
+      m.castShadow = shadow;
       m.receiveShadow = true;
       group.add(m);
       return m;
@@ -562,69 +565,105 @@ export class World {
       const t = HOUSE_TIERS[lot.tier];
       const g = new THREE.Group();
       const f = -lot.side; // direction de la façade (vers l'avenue)
-      // Terrain : pelouse, haie (ouverte devant), allée
-      mesh(new THREE.BoxGeometry(RESIDENTIAL.lotW - 1, 0.04, RESIDENTIAL.lotD), lawn, lot.x, 0.02, lot.z, g).castShadow = false;
-      const back = lot.z + lot.side * (RESIDENTIAL.lotD / 2);
-      mesh(new THREE.BoxGeometry(RESIDENTIAL.lotW - 1, 0.9, 0.5), hedge, lot.x, 0.45, back, g);
-      for (const sx of [-1, 1]) {
-        mesh(new THREE.BoxGeometry(0.5, 0.9, RESIDENTIAL.lotD), hedge, lot.x + sx * (RESIDENTIAL.lotW / 2 - 0.75), 0.45, lot.z, g);
-        mesh(new THREE.BoxGeometry(9, 0.9, 0.5), hedge, lot.x + sx * 7.5, 0.45, lot.door.z + lot.side * 0.3, g);
-      }
       const h = lot.house;
-      const pathLen = Math.abs(h.z - f * (h.d / 2) - lot.door.z);
-      mesh(new THREE.BoxGeometry(2.2, 0.05, pathLen), paving, lot.x, 0.05, (h.z - f * (h.d / 2) + lot.door.z) / 2, g).castShadow = false;
+      const G = lot.garage;
+      const W = RESIDENTIAL.lotW;
+      // --- Terrain : pelouse, haies (ouvertes pour l'allée piétonne et l'allée du garage), allées
+      mesh(new THREE.BoxGeometry(W - 1, 0.04, RESIDENTIAL.lotD), lawn, lot.x, 0.02, lot.z, g, false);
+      mesh(new THREE.BoxGeometry(W - 1, 0.9, 0.5), hedge, lot.x, 0.45, lot.back, g);
+      for (const sx of [-1, 1]) mesh(new THREE.BoxGeometry(0.5, 0.9, RESIDENTIAL.lotD), hedge, lot.x + sx * (W / 2 - 0.75), 0.45, lot.z, g);
+      const gaps = [[G.x - 2, G.x + 2], [h.x - 1.6, h.x + 1.6]].sort((a, b) => a[0] - b[0]);
+      let from = lot.x - W / 2 + 0.5;
+      for (const [a, b] of [...gaps, [lot.x + W / 2 - 0.5, Infinity]]) {
+        if (a - from > 0.3) mesh(new THREE.BoxGeometry(a - from, 0.9, 0.5), hedge, (a + from) / 2, 0.45, lot.front - f * 0.3, g);
+        from = b;
+      }
+      const pathLen = Math.abs(h.frontZ - lot.front);
+      mesh(new THREE.BoxGeometry(2.2, 0.05, pathLen), paving, h.x, 0.05, (h.frontZ + lot.front) / 2, g, false);
+      const driveLen = Math.abs(G.doorFront - lot.front);
+      mesh(new THREE.BoxGeometry(3.8, 0.05, driveLen), asphalt, G.x, 0.05, (G.doorFront + lot.front) / 2, g, false);
 
-      // Maison
+      // --- Maison
       const wallMat = new THREE.MeshStandardMaterial({ color: DEFAULT_HOUSE_COLORS.wall, roughness: 0.85 });
       const roofMat = new THREE.MeshStandardMaterial({ color: DEFAULT_HOUSE_COLORS.roof, roughness: 0.7 });
+      // Vitres : s'éclairent quand les lumières sont allumées
+      const winMat = new THREE.MeshPhysicalMaterial({ color: '#1e3a5f', roughness: 0.05, metalness: 0.4, clearcoat: 1, emissive: '#ffcf7a', emissiveIntensity: 0 });
+      const lampMat = new THREE.MeshStandardMaterial({ color: '#fff7d6', emissive: '#ffd58a', emissiveIntensity: 0 });
       const floorH = t.floors === 2 ? 3.2 : 3.4;
-      const bodyH = floorH * t.floors;
-      const frontZ = h.z + f * (h.d / 2);
+      const bodyH = h.bodyH;
+      const frontZ = h.frontZ;
       mesh(new THREE.BoxGeometry(h.w, bodyH, h.d), wallMat, h.x, bodyH / 2, h.z, g);
       if (lot.tier === 'luxe') {
-        // Moderne : toit plat débordant, grandes baies vitrées
         mesh(new THREE.BoxGeometry(h.w + 1.6, 0.35, h.d + 1.6), roofMat, h.x, bodyH + 0.17, h.z, g);
-        mesh(new THREE.BoxGeometry(h.w * 0.62, bodyH * 0.8, 0.12), glass, h.x + h.w * 0.12, bodyH * 0.45, frontZ + f * 0.06, g);
+        mesh(new THREE.BoxGeometry(h.w * 0.6, bodyH * 0.8, 0.12), winMat, h.x + h.w * 0.15, bodyH * 0.45, frontZ + f * 0.06, g);
       } else {
-        // Toit à deux pans (prisme)
         const roofH = t.floors === 2 ? 2.6 : 2.3;
         const shape = new THREE.Shape([new THREE.Vector2(-h.w / 2 - 0.5, 0), new THREE.Vector2(h.w / 2 + 0.5, 0), new THREE.Vector2(0, roofH)]);
         const roofGeo = new THREE.ExtrudeGeometry(shape, { depth: h.d + 0.8, bevelEnabled: false }).translate(0, 0, -(h.d + 0.8) / 2);
         mesh(roofGeo, roofMat, h.x, bodyH, h.z, g);
-        mesh(new THREE.BoxGeometry(0.7, 1.6, 0.7), roofMat, h.x + h.w * 0.25, bodyH + 1.4, h.z, g); // cheminée
+        mesh(new THREE.BoxGeometry(0.7, 1.6, 0.7), roofMat, h.x + h.w * 0.25, bodyH + 1.4, h.z, g);
         for (let fl = 0; fl < t.floors; fl++) {
           for (const wx of [-h.w * 0.3, h.w * 0.3]) {
-            if (fl === 0 && Math.abs(wx) < 1) continue;
-            mesh(new THREE.BoxGeometry(1.4, 1.3, 0.12), glass, h.x + wx, fl * floorH + 1.8, frontZ + f * 0.06, g);
+            mesh(new THREE.BoxGeometry(1.4, 1.3, 0.12), winMat, h.x + wx, fl * floorH + 1.8, frontZ + f * 0.06, g);
             mesh(new THREE.BoxGeometry(1.6, 0.12, 0.25), white, h.x + wx, fl * floorH + 1.08, frontZ + f * 0.1, g);
           }
         }
-        if (t.floors === 2) mesh(new THREE.BoxGeometry(h.w * 0.5, 0.15, 1.4), white, h.x, floorH, frontZ + f * 0.7, g); // balcon
+        if (t.floors === 2) mesh(new THREE.BoxGeometry(h.w * 0.5, 0.15, 1.4), white, h.x, floorH, frontZ + f * 0.7, g);
       }
-      // Fenêtres latérales
-      for (const sx of [-1, 1]) mesh(new THREE.BoxGeometry(0.12, 1.3, 1.6), glass, h.x + sx * (h.w / 2 + 0.06), 1.8, h.z, g);
-      // Porte
+      mesh(new THREE.BoxGeometry(0.12, 1.3, 1.6), winMat, h.x + h.w / 2 + 0.06, 1.8, h.z, g);
       mesh(new THREE.BoxGeometry(1.2, 2.2, 0.15), wood, h.x, 1.1, frontZ + f * 0.08, g);
-      mesh(new THREE.BoxGeometry(2.4, 0.3, 1.2), white, h.x, 0.15, frontZ + f * 0.6, g).castShadow = false; // perron
-      // Garage
-      if (t.garage) {
-        const gx = h.x - h.w / 2 - 2.6;
-        mesh(new THREE.BoxGeometry(5, 3, h.d * 0.7), wallMat, gx, 1.5, h.z + f * (h.d * 0.15), g);
-        mesh(new THREE.BoxGeometry(3.6, 2.4, 0.12), white, gx, 1.2, h.z + f * (h.d * 0.15 + h.d * 0.35 + 0.06), g);
-        mesh(new THREE.BoxGeometry(5.4, 0.25, h.d * 0.7 + 0.4), roofMat, gx, 3.1, h.z + f * (h.d * 0.15), g);
+      mesh(new THREE.BoxGeometry(2.4, 0.3, 1.2), white, h.x, 0.15, frontZ + f * 0.6, g, false);
+      mesh(new THREE.SphereGeometry(0.16, 12, 8), lampMat, h.x, 2.6, frontZ + f * 0.25, g); // applique d'entrée
+
+      // --- Garage (ou abri voiture pour la maison)
+      let garageDoor = null;
+      const gBack = G.z - f * (G.d / 2);
+      if (G.carport) {
+        for (const [dx, dz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) mesh(new THREE.BoxGeometry(0.18, 2.6, 0.18), white, G.x + dx * (G.w / 2 - 0.2), 1.3, G.z + dz * (G.d / 2 - 0.2), g);
+        mesh(new THREE.BoxGeometry(G.w + 0.4, 0.18, G.d + 0.4), roofMat, G.x, 2.7, G.z, g);
+      } else {
+        mesh(new THREE.BoxGeometry(0.25, 3, G.d), wallMat, G.x - G.w / 2 + 0.12, 1.5, G.z, g);
+        mesh(new THREE.BoxGeometry(0.25, 3, G.d), wallMat, G.x + G.w / 2 - 0.12, 1.5, G.z, g);
+        mesh(new THREE.BoxGeometry(G.w, 3, 0.25), wallMat, G.x, 1.5, gBack + f * 0.12, g);
+        mesh(new THREE.BoxGeometry(G.w + 0.4, 0.25, G.d + 0.4), roofMat, G.x, 3.1, G.z, g);
+        mesh(new THREE.BoxGeometry(G.w - 0.5, 0.5, 0.25), wallMat, G.x, 2.75, G.doorFront - f * 0.12, g); // linteau
+        garageDoor = mesh(new THREE.BoxGeometry(G.w - 0.5, 2.5, 0.12), white, G.x, 1.25, G.doorFront - f * 0.1, g);
+        garageDoor.userData = { open: 0 };
       }
-      // Piscine
-      if (t.pool) {
-        const pz = (frontZ + lot.door.z) / 2 + lot.side * 0.5;
-        mesh(new THREE.BoxGeometry(8.4, 0.3, 4.4), white, lot.x + 5, 0.15, pz, g).castShadow = false;
-        mesh(new THREE.BoxGeometry(7.6, 0.05, 3.6), water, lot.x + 5, 0.31, pz, g).castShadow = false;
+      const cars = new THREE.Group();
+      g.add(cars);
+
+      // --- Piscine + éclairage
+      let poolMat = null;
+      if (lot.pool) {
+        poolMat = new THREE.MeshPhysicalMaterial({ color: '#22b8e6', roughness: 0.05, clearcoat: 1, transparent: true, opacity: 0.9, emissive: '#22d3ee', emissiveIntensity: 0 });
+        mesh(new THREE.BoxGeometry(8.4, 0.3, 4.4), white, lot.pool.x, 0.15, lot.pool.z, g, false);
+        mesh(new THREE.BoxGeometry(7.6, 0.05, 3.6), poolMat, lot.pool.x, 0.31, lot.pool.z, g, false);
       }
-      // Boîte aux lettres + plaque / panneau « À vendre »
+
+      // --- Caméras de surveillance (nombre selon la taille de la maison)
+      for (const cam of lot.cameras) {
+        const c = new THREE.Group();
+        c.position.set(...cam.pos);
+        c.lookAt(new THREE.Vector3(...cam.look));
+        mesh(new THREE.BoxGeometry(0.22, 0.18, 0.38), white, 0, 0, 0, c);
+        mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.05, 12).rotateX(Math.PI / 2), lens, 0, 0, 0.2, c);
+        mesh(new THREE.SphereGeometry(0.025, 6, 4), led, 0.07, 0.07, 0.17, c);
+        g.add(c);
+      }
+
+      // --- Interrupteurs physiques (touche E)
+      for (const b of lot.buttons) {
+        const plate = mesh(new THREE.BoxGeometry(0.22, 0.3, 0.05), white, b.x, b.y, b.z, g, false);
+        mesh(new THREE.BoxGeometry(0.1, 0.1, 0.03), new THREE.MeshStandardMaterial({ color: BTN_COLORS[b.device], emissive: BTN_COLORS[b.device], emissiveIntensity: 0.4 }), b.x, b.y, b.z + f * 0.04, g, false);
+        if (b.device === 'pool') plate.position.y = b.y;
+      }
+
+      // --- Panneau « À vendre » / plaque de la famille
       const post = new THREE.Group();
-      post.position.set(lot.x - 3.2, 0, lot.door.z + lot.side * 0.8);
+      post.position.set(lot.x - 3.2, 0, lot.front + lot.side * 0.8);
       mesh(new THREE.BoxGeometry(0.12, 1.4, 0.12), wood, 0, 0.7, 0, post);
       const signMat = new THREE.MeshBasicMaterial();
-      // Deux faces dos à dos : le texte se lit dans les deux sens (pas d'effet miroir)
       for (const back of [0, Math.PI]) {
         const sign = mesh(new THREE.PlaneGeometry(2.6, 0.9), signMat, 0, 1.8, 0, post);
         sign.rotation.y = back;
@@ -632,29 +671,60 @@ export class World {
       }
       g.add(post);
       add(g);
-      this.houses.set(lot.id, { lot, wallMat, roofMat, signMat, owned: null });
+      this.houses.set(lot.id, { lot, wallMat, roofMat, signMat, winMat, lampMat, poolMat, garageDoor, cars, carsKey: '', owned: null });
     }
     this.updateHouses([]);
   }
 
-  /** Applique l'état des ventes : couleurs et plaques des maisons. */
+  /** Applique l'état des maisons : propriétaire, couleurs, appareils connectés, véhicules garés. */
   updateHouses(list) {
     if (!this.houses) return;
     const byLot = new Map(list.map((h) => [h.lot, h]));
     for (const [id, hs] of this.houses) {
       const o = byLot.get(id) ?? null;
-      const key = o ? `${o.family}|${o.wall}|${o.roof}` : 'libre';
-      if (hs.key === key) continue;
-      hs.key = key;
       hs.owned = o;
-      hs.wallMat.color.set(o?.wall ?? DEFAULT_HOUSE_COLORS.wall);
-      hs.roofMat.color.set(o?.roof ?? DEFAULT_HOUSE_COLORS.roof);
-      hs.signMat.map?.dispose();
-      hs.signMat.map = o
-        ? signTexture(`Famille ${o.family}`.slice(0, 22), '#14532d', 40)
-        : signTexture(`À VENDRE · ${formatMoney(HOUSE_TIERS[hs.lot.tier].price)}`, '#b91c1c', 36);
-      hs.signMat.needsUpdate = true;
+      const key = o ? `${o.family}|${o.wall}|${o.roof}` : 'libre';
+      if (hs.key !== key) {
+        hs.key = key;
+        hs.wallMat.color.set(o?.wall ?? DEFAULT_HOUSE_COLORS.wall);
+        hs.roofMat.color.set(o?.roof ?? DEFAULT_HOUSE_COLORS.roof);
+        hs.signMat.map?.dispose();
+        hs.signMat.map = o ? signTexture(`Famille ${o.family}`.slice(0, 22), '#14532d', 40) : signTexture(`À VENDRE · ${formatMoney(HOUSE_TIERS[hs.lot.tier].price)}`, '#b91c1c', 36);
+        hs.signMat.needsUpdate = true;
+      }
+      const d = o?.devices ?? {};
+      hs.winMat.emissiveIntensity = d.lights ? 0.7 : 0;
+      hs.lampMat.emissiveIntensity = d.lights ? 3 : 0;
+      if (hs.poolMat) hs.poolMat.emissiveIntensity = d.pool ? 1.2 : 0;
+      if (hs.garageDoor) hs.garageDoor.userData.target = d.garage ? 1 : 0;
+      // Véhicules garés (place 0 dans le garage, les suivantes dans l'allée)
+      const carsKey = JSON.stringify(o?.garage ?? []);
+      if (carsKey !== hs.carsKey) {
+        hs.carsKey = carsKey;
+        for (const c of [...hs.cars.children]) {
+          hs.cars.remove(c);
+          disposeCar(c);
+        }
+        (o?.garage ?? []).forEach((c, i) => {
+          const spot = hs.lot.garage.slots[i];
+          if (!c || !spot) return;
+          const car = createCar(c.model, c.color);
+          car.position.set(spot.x, 0, spot.z);
+          car.rotation.y = hs.lot.side < 0 ? 0 : Math.PI; // capot vers l'avenue
+          hs.cars.add(car);
+        });
+      }
     }
+  }
+
+  /** Maison la plus proche dont la musique joue (pour l'audio). */
+  musicNear(pos) {
+    let best = Infinity;
+    for (const hs of this.houses?.values() ?? []) {
+      if (!hs.owned?.devices?.music) continue;
+      best = Math.min(best, Math.hypot(pos.x - hs.lot.house.x, pos.z - hs.lot.house.z));
+    }
+    return best;
   }
 
   addSign(mesh, place, b, front) {
@@ -665,6 +735,12 @@ export class World {
   }
 
   clear() {
+    for (const hs of this.houses?.values() ?? []) {
+      for (const c of [...hs.cars.children]) {
+        hs.cars.remove(c);
+        disposeCar(c);
+      }
+    }
     for (const c of [...this.trafficGroup.children]) {
       this.trafficGroup.remove(c);
       disposeCar(c);
@@ -751,6 +827,16 @@ export class World {
       spinWheels(t.car, t.speed * dt);
     }
 
+    for (const hs of this.houses?.values() ?? []) {
+      const door = hs.garageDoor;
+      if (!door) continue;
+      const u = door.userData;
+      const target = u.target ?? 0;
+      if (Math.abs(u.open - target) < 0.001) continue;
+      u.open += Math.sign(target - u.open) * Math.min(Math.abs(target - u.open), dt * 0.6); // porte motorisée
+      door.scale.y = 1 - u.open * 0.92;
+      door.position.y = 1.25 + u.open * 1.15; // la porte s'enroule vers le haut
+    }
     if (this.missionMarker.visible) {
       this.missionMarker.userData.ring.scale.setScalar(1 + Math.sin(time * 4) * 0.1);
     }

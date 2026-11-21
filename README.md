@@ -29,6 +29,7 @@ Variables : `PORT` (défaut 3000), `DATA_FILE` (défaut `data/db.json`).
 | Skins | Teint, cheveux, haut, pantalon, chapeau (couleurs libres) ; boutique de vêtements (casquette, cowboy, boubou, costume, couronne…) |
 | Véhicules | 45 modèles de 11 marques fictives (Japon, Corée, Allemagne, France, Italie, R.-U., USA, Chine, Suède, Bénin, Norvège) : citadines, berlines, breaks, SUV, pick-up, sportives, supercars, minibus (gbaka), camion, bus, motos (zémidjan). Carrosserie profilée, vitrage, optiques, jantes à rayons, phares la nuit, boîte auto, frein à main/dérapage, roulis, son moteur synthétisé, compteur |
 | Maisons familiales | Quartier résidentiel dans chaque pays (avenue à l'ouest de la ville) : 14 terrains — Maison 15 000 🐚, Villa avec garage 40 000 🐚, Villa de luxe avec piscine 120 000 🐚. Achat par le chef avec la **cagnotte familiale** (alimentée par tous les membres), 2 maisons max par famille, revente à 60 %. Plaque au nom de la famille, couleurs des murs et du toit au choix, apparition à la maison et bouton « 🏠 Rentrer » |
+| Maison connectée | **Garage** selon la taille (abri 1 place, villa 2, luxe 3) : garer, sortir, emprunter le véhicule d'un membre (retour automatique en descendant). **Caméras de surveillance** (2 / 4 / 6) en direct sur le **téléphone** (touche T) avec journal des passages. **Appareils** : lumières, porte du garage motorisée, alarme (sirène + alerte de la famille en cas d'intrusion), musique, éclairage de piscine — pilotables à distance par le téléphone ou sur place par les **interrupteurs physiques** (touche E) |
 | Monnaies | **Cauris 🐚** (argent du jeu, gagné par les métiers) et **Vida Ʋ** (monnaie de l'application, achetée en argent réel) |
 | Paiements | MTN MoMo, Moov Money, Celtiis Cash, Wave, Orange Money, PayPal/carte ; reçu numéroté imprimable pour chaque paiement, historique |
 | Premium ⭐ | 3 mois : 1 000 FCFA (100 Ʋ) la 1re fois, 1 600 FCFA (160 Ʋ) ensuite ; badge doré, +50 % de salaire, −30 % sur les vols, véhicules exclusifs |
@@ -37,7 +38,7 @@ Variables : `PORT` (défaut 3000), `DATA_FILE` (défaut `data/db.json`).
 
 Commandes : ZQSD/WASD/flèches, souris pour la caméra, Maj courir, Espace sauter (frein à main en voiture),
 **E** interagir, **V** véhicule, **B** klaxon, **M** son, **P** Vida/Premium, **C** garde-robe, **G** famille,
-**H** aide, Entrée chat. Sur mobile : joystick + boutons.
+**T** téléphone, **H** aide, Entrée chat. Sur mobile : joystick + boutons.
 
 ## Connexion par téléphone (code SMS)
 

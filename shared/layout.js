@@ -198,6 +198,8 @@ export function getLayout(code) {
   for (const lot of LOTS) {
     const h = lot.house;
     colliders.push({ minX: h.x - h.w / 2, maxX: h.x + h.w / 2, minZ: h.z - h.d / 2, maxZ: h.z + h.d / 2 });
+    const g = lot.garage;
+    if (!g.carport) colliders.push({ minX: g.x - g.w / 2, maxX: g.x + g.w / 2, minZ: g.z - g.d / 2, maxZ: g.z + g.d / 2 });
   }
 
   // Arbres / végétation (hors routes, hors bâtiments, hors aéroport)

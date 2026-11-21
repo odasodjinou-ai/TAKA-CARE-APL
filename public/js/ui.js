@@ -9,7 +9,7 @@ import {
 } from '/shared/catalog.js';
 import { VEHICLES, VEHICLE_BY_ID, BRANDS, CATEGORIES } from '/shared/vehicles.js';
 import { createCar, disposeCar } from './vehicles.js';
-import { LOTS, LOT_BY_ID, HOUSE_TIERS, MAX_HOUSES_PER_FAMILY, SELL_REFUND, RESIDENTIAL } from '/shared/houses.js';
+import { LOTS, LOT_BY_ID, HOUSE_TIERS, MAX_HOUSES_PER_FAMILY, SELL_REFUND, RESIDENTIAL, devicesFor } from '/shared/houses.js';
 import { ROAD_LINES, WORLD, PLACES } from '/shared/layout.js';
 
 export const $ = (sel) => document.querySelector(sel);
@@ -47,6 +47,7 @@ export function openPanel(id, title, render) {
   renderCurrent = render;
   $('#panel-title').textContent = title;
   document.querySelector('.panel-card').classList.toggle('wide', id === 'admin');
+  document.querySelector('.panel-card').classList.toggle('narrow', id === 'phone');
   $('#panel').classList.remove('hidden');
   refreshPanel();
 }
@@ -60,6 +61,7 @@ export function refreshPanel() {
 }
 
 export function closePanel() {
+  if (currentPanel === 'phone') window.dispatchEvent(new Event('phoneclosed'));
   currentPanel = null;
   renderCurrent = null;
   $('#panel').classList.add('hidden');
@@ -398,6 +400,7 @@ export const PANELS = {
       ['B · M', 'Klaxon · couper le son'],
       ['P', '💎 Vida, Premium et reçus'],
       ['C · G · H', 'Garde-robe · Famille · Aide'],
+      ['T', '📱 Téléphone : maison connectée, caméras, garage'],
       ['Entrée', 'Discuter'],
     ];
     return h(
@@ -965,4 +968,118 @@ PANELS.house = (game) => {
       h('button', { class: 'btn primary big', disabled: fam.treasury < t.price, onclick: () => confirm(`Acheter cette ${t.name.toLowerCase()} pour ${formatMoney(t.price)} avec la cagnotte familiale ?`) && game.net.send('houseBuy', { lot: lot.id }) }, `Acheter pour ${formatMoney(t.price)}`),
     );
   return h('div', {}, desc, h('p', {}, 'Prix : ', h('b', {}, formatMoney(t.price)), ' (payé avec la cagnotte familiale)'), action);
+};
+
+// --- Téléphone : maison connectée, caméras, garage -------------------------------------------
+const EVENT_LABEL = { visit: '📷 Visiteur devant la maison', alarm: '🚨 Intrusion (alarme)', button: '🔒 Tentative sur un interrupteur' };
+
+function myHouses(game) {
+  return (game.profile.family?.houses ?? []).map((x) => ({ ...x, lotData: LOT_BY_ID.get(x.lot), state: game.housesByCountry?.get(x.country)?.get(x.lot) }));
+}
+
+PANELS.phone = (game) => {
+  const ph = (game.phoneUi ??= { app: 'home', cam: 0, house: null });
+  const houses = myHouses(game);
+  // Demande l'état des maisons situées dans d'autres pays
+  for (const x of houses) if (!game.housesByCountry?.has(x.country) && !ph.asked?.has(x.country)) {
+    (ph.asked ??= new Set()).add(x.country);
+    game.net.send('housesFor', { country: x.country });
+  }
+  const go = (app) => () => {
+    ph.app = app;
+    if (app !== 'cams') game.cctv = null;
+    refreshPanel();
+  };
+  const bar = h('div', { class: 'phone-bar' }, h('span', {}, game.clock?.() ?? ''), h('span', {}, '📶 🔋'));
+  const back = h('button', { class: 'btn ghost', onclick: go('home') }, '‹ Accueil');
+  let screen;
+  if (!game.profile.family) screen = h('p', { class: 'muted' }, 'Rejoins une famille et achetez une maison pour utiliser la maison connectée.');
+  else if (!houses.length) screen = h('p', { class: 'muted' }, 'Ta famille n\'a pas encore de maison. Les appareils, caméras et le garage apparaîtront ici.');
+  else if (ph.app === 'home') {
+    screen = h(
+      'div',
+      { class: 'phone-apps' },
+      [['devices', '🏠', 'Maison'], ['cams', '📷', 'Caméras'], ['garage', '🚗', 'Garage']].map(([app, icon, label]) => h('button', { class: 'phone-app', onclick: go(app) }, h('span', {}, icon), label)),
+    );
+  } else if (ph.app === 'devices') {
+    screen = h(
+      'div',
+      {},
+      back,
+      houses.map((x) =>
+        h(
+          'div',
+          { class: 'phone-card' },
+          h('b', {}, `${COUNTRY_BY_CODE.get(x.country)?.flag ?? ''} ${HOUSE_TIERS[x.tier].name} n°${x.lot}`),
+          devicesFor(x.tier).map((d) => {
+            const on = !!x.state?.devices?.[d.id];
+            return h(
+              'div',
+              { class: 'phone-row' },
+              h('span', {}, `${d.icon} ${d.label}`),
+              h('button', { class: `toggle ${on ? 'on' : ''}`, disabled: !x.state, onclick: () => game.net.send('houseDevice', { country: x.country, lot: x.lot, device: d.id, via: 'phone' }) }, h('i', {})),
+            );
+          }),
+        ),
+      ),
+      h('p', { class: 'muted' }, 'Tu peux aussi utiliser les interrupteurs sur la maison (touche E).'),
+    );
+  } else if (ph.app === 'cams') {
+    const here = houses.filter((x) => x.country === game.country);
+    if (!here.length) {
+      game.cctv = null;
+      screen = h('div', {}, back, h('p', { class: 'muted' }, 'Hors de portée : les caméras se consultent quand tu es dans le même pays que la maison.'));
+    } else {
+      const x = here.find((y) => y.lot === ph.house) ?? here[0];
+      ph.house = x.lot;
+      const cams = x.lotData.cameras;
+      ph.cam = Math.min(ph.cam, cams.length - 1);
+      const cam = cams[ph.cam];
+      const view = (game.cctvCanvas ??= h('canvas', { width: 320, height: 180, class: 'cctv' }));
+      game.cctv = { cam, canvas: view, label: `CAM ${cam.id} · ${cam.label}` };
+      if (!ph.events || ph.eventsLot !== x.lot) {
+        ph.eventsLot = x.lot;
+        game.net.send('houseEvents', { country: x.country, lot: x.lot });
+      }
+      screen = h(
+        'div',
+        {},
+        back,
+        here.length > 1 ? h('div', { class: 'tabs' }, here.map((y) => h('button', { class: `btn ${y.lot === x.lot ? 'active' : ''}`, onclick: () => ((ph.house = y.lot), (ph.cam = 0), (ph.events = null), refreshPanel()) }, `n°${y.lot}`))) : null,
+        view,
+        h('div', { class: 'phone-row' }, h('button', { class: 'btn', onclick: () => ((ph.cam = (ph.cam - 1 + cams.length) % cams.length), refreshPanel()) }, '◀'), h('span', {}, `${cam.label} (${ph.cam + 1}/${cams.length})`), h('button', { class: 'btn', onclick: () => ((ph.cam = (ph.cam + 1) % cams.length), refreshPanel()) }, '▶')),
+        h('div', { class: 'region-title' }, 'Journal de surveillance'),
+        ph.events?.length
+          ? h('ul', { class: 'list phone-list' }, ph.events.slice(0, 10).map((e) => h('li', {}, h('span', {}, `${EVENT_LABEL[e.kind] ?? e.kind} — ${e.name}`), h('span', { class: 'meta' }, new Date(e.at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })))))
+          : h('p', { class: 'muted' }, 'Aucun passage enregistré.'),
+      );
+    }
+  } else {
+    screen = h(
+      'div',
+      {},
+      back,
+      houses.map((x) => {
+        const slots = HOUSE_TIERS[x.tier].garageSlots;
+        const list = x.state?.garage ?? [];
+        return h(
+          'div',
+          { class: 'phone-card' },
+          h('b', {}, `${COUNTRY_BY_CODE.get(x.country)?.flag ?? ''} Garage n°${x.lot} — ${list.filter(Boolean).length}/${slots}`),
+          Array.from({ length: slots }, (_, i) => {
+            const c = list[i];
+            return h(
+              'div',
+              { class: 'phone-row' },
+              h('span', {}, c ? `🚗 ${VEHICLE_BY_ID.get(c.model)?.name ?? c.model} (${c.owner})` : `Place ${i + 1} : libre`),
+              c && x.country === game.country ? h('button', { class: 'btn', onclick: () => game.net.send('garageTake', { lot: x.lot, slot: i }) }, 'Sortir') : null,
+            );
+          }),
+          x.country === game.country ? h('button', { class: 'btn primary', onclick: () => game.net.send('garagePark', { lot: x.lot }) }, '🅿️ Garer mon véhicule ici') : h('p', { class: 'muted' }, 'Garage dans un autre pays.'),
+        );
+      }),
+      h('p', { class: 'muted' }, 'Pour garer ou sortir un véhicule, approche-toi du garage. Les véhicules des autres membres peuvent être empruntés : ils y retournent quand tu descends.'),
+    );
+  }
+  return h('div', { class: 'phone' }, bar, h('div', { class: 'phone-screen' }, screen));
 };

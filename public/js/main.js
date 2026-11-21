@@ -10,9 +10,9 @@ import { World } from './world.js';
 import { Character } from './character.js';
 import { createCar, setCarColor, spinWheels, disposeCar, bodySpec } from './vehicles.js';
 import { Driving } from './driving.js';
-import { EngineSound } from './audio.js';
+import { EngineSound, MusicBox, siren } from './audio.js';
 import { VEHICLE_BY_ID } from '/shared/vehicles.js';
-import { LOTS, HOUSE_TIERS } from '/shared/houses.js';
+import { LOTS, HOUSE_TIERS, LOT_BY_ID, DEVICES, BUTTON_RADIUS, GARAGE_RADIUS } from '/shared/houses.js';
 import { $, h, toast, openPanel, closePanel, refreshPanel, panelOpen, PANELS, drawMinimap, phoneFlow } from './ui.js';
 
 const CREDS_KEY = 'terravida:creds';
@@ -80,6 +80,9 @@ const me = {
   drive: null,
 };
 const engine = new EngineSound();
+const music = new MusicBox(engine);
+addEventListener('pointerdown', () => engine.ensure(), { once: true }); // débloque l'audio
+addEventListener('keydown', () => engine.ensure(), { once: true });
 const cam = { yaw: Math.PI, pitch: 0.32, dist: 7, lastDrag: 0 };
 let cinematic = null;
 
@@ -109,6 +112,7 @@ addEventListener('keydown', (e) => {
   if (e.code === 'KeyG') togglePanel('family', '👨‍👩‍👧 Famille');
   if (e.code === 'KeyH') togglePanel('help', '❔ Aide');
   if (e.code === 'KeyP') togglePanel('vida');
+  if (e.code === 'KeyT') togglePanel('phone');
   if (e.code === 'KeyB' && me.inCar) engine.horn();
   if (e.code === 'KeyM') toast(engine.toggleMute() ? '🔇 Son coupé' : '🔊 Son activé');
   if (e.code === 'Space') e.preventDefault();
@@ -185,6 +189,7 @@ const PANEL_TITLES = {
   vida: '💎 Vida & Premium',
   account: '👤 Mon compte',
   house: '🏠 Maison',
+  phone: '📱 Téléphone',
   admin: '🛡️ Modération',
 };
 
@@ -206,6 +211,21 @@ function nearestPlace() {
     const d = Math.hypot(me.pos.x - p.door.x, me.pos.z - p.door.z);
     if (d <= INTERACT_RADIUS && (!best || d < best.d)) best = { p, d };
   }
+  // Interrupteurs physiques et garages des maisons
+  for (const [lotId, st] of game.houses ?? []) {
+    const lot = LOT_BY_ID.get(lotId);
+    for (const b of lot.buttons) {
+      const d = Math.hypot(me.pos.x - b.x, me.pos.z - b.z);
+      if (d <= BUTTON_RADIUS && !me.inCar && (!best || d < best.d)) {
+        const dev = DEVICES[b.device];
+        best = { d: d - 10, p: { id: 'button', lot: lotId, device: b.device, label: `Interrupteur : ${dev.icon} ${dev.label} (${st.devices?.[b.device] ? 'allumé' : 'éteint'})` } };
+      }
+    }
+    if (st.familyId === game.profile?.family?.id) {
+      const d = Math.hypot(me.pos.x - lot.garage.x, me.pos.z - lot.garage.doorFront);
+      if (d <= (me.inCar ? GARAGE_RADIUS : 4) && (!best || d < best.d)) best = { d, p: { id: 'garage', lot: lotId, label: me.inCar ? 'Garer le véhicule au garage' : 'Garage familial' } };
+    }
+  }
   // Portails des maisons du quartier résidentiel
   for (const lot of LOTS) {
     const d = Math.hypot(me.pos.x - lot.door.x, me.pos.z - lot.door.z);
@@ -223,6 +243,12 @@ function interact() {
   if (p.id === 'house') {
     game.houseLot = p.lot;
     return togglePanel('house', `🏠 ${p.label}`);
+  }
+  if (p.id === 'button') return net.send('houseDevice', { lot: p.lot, device: p.device, via: 'button' });
+  if (p.id === 'garage') {
+    if (me.inCar) return net.send('garagePark', { lot: p.lot });
+    (game.phoneUi ??= { app: 'home', cam: 0, house: null }).app = 'garage';
+    return togglePanel('phone');
   }
   togglePanel(p.id);
 }
@@ -247,8 +273,8 @@ function unmount(character, parent) {
   character.group.visible = true;
 }
 
-function makeMyCar() {
-  const s = game.profile.skin;
+function makeMyCar(override = null) {
+  const s = override ?? game.profile.skin;
   if (me.car) {
     unmount(me.character, scene);
     scene.remove(me.car);
@@ -297,6 +323,7 @@ function toggleCar() {
     me.carSpeed = 0;
     net.send('car', { on: false });
   } else {
+    me.carOverride = null;
     const v = VEHICLE_BY_ID.get(game.profile.skin.car);
     if (v?.premiumOnly && !game.profile.premium?.active) return toast(`${v.name} est réservé aux membres ⭐ Premium.`, 'warn');
     if (!me.car || me.car.userData.model !== game.profile.skin.car) makeMyCar();
@@ -577,6 +604,52 @@ function updateHud() {
   } else banner.classList.add('hidden');
 }
 
+// --- Caméras de surveillance : rendu hors écran recopié dans le téléphone ----------------------
+const cctvCam = new THREE.PerspectiveCamera(70, 16 / 9, 0.1, 400);
+const cctvTarget = new THREE.WebGLRenderTarget(320, 180);
+cctvTarget.texture.colorSpace = THREE.SRGBColorSpace;
+const cctvPixels = new Uint8Array(320 * 180 * 4);
+let cctvLast = 0;
+function renderCctv(time) {
+  const c = game.cctv;
+  if (!c || !c.canvas.isConnected || time - cctvLast < 0.12) return;
+  cctvLast = time;
+  // On se place juste devant l'objectif (sinon le boîtier de la caméra bouche la vue)
+  const look = new THREE.Vector3(...c.cam.look);
+  cctvCam.position.set(...c.cam.pos).add(look.clone().sub(cctvCam.position.set(...c.cam.pos)).normalize().multiplyScalar(0.5));
+  cctvCam.lookAt(look);
+  renderer.setRenderTarget(cctvTarget);
+  renderer.render(scene, cctvCam);
+  renderer.readRenderTargetPixels(cctvTarget, 0, 0, 320, 180, cctvPixels);
+  renderer.setRenderTarget(null);
+  const ctx = c.canvas.getContext('2d');
+  const img = ctx.createImageData(320, 180);
+  for (let y = 0; y < 180; y++) {
+    for (let x = 0; x < 320; x++) {
+      const src = ((179 - y) * 320 + x) * 4; // image retournée verticalement
+      const dst = (y * 320 + x) * 4;
+      // Rendu « vidéosurveillance » : niveaux de gris légèrement verdâtres + grain
+      const l = 0.3 * cctvPixels[src] + 0.59 * cctvPixels[src + 1] + 0.11 * cctvPixels[src + 2] + (Math.random() - 0.5) * 18;
+      img.data[dst] = l * 0.85;
+      img.data[dst + 1] = l;
+      img.data[dst + 2] = l * 0.85;
+      img.data[dst + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  ctx.font = 'bold 11px monospace';
+  ctx.fillStyle = '#fff';
+  ctx.fillText(c.label, 8, 16);
+  ctx.fillText(World.clockString(), 270, 16);
+  if (Math.floor(time * 2) % 2) {
+    ctx.fillStyle = '#ef4444';
+    ctx.beginPath();
+    ctx.arc(14, 168, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillText('REC', 22, 172);
+  }
+}
+
 const clock = new THREE.Clock();
 function frame() {
   requestAnimationFrame(frame);
@@ -604,6 +677,11 @@ function frame() {
   }
   renderer.render(scene, camera);
   labels.render(scene, camera);
+  if (world.code && me.character) {
+    const d = world.musicNear(me.pos);
+    music.setVolume(d < 40 ? 0.12 * (1 - d / 40) : 0);
+  }
+  renderCctv(time);
 }
 
 // --- Écrans ----------------------------------------------------------------------------
@@ -647,6 +725,7 @@ $('#btn-logout').addEventListener('click', () => {
 
 // Connexion par téléphone : onglets et formulaire
 game.guessCountry = COUNTRY_BY_CODE.has(guess) ? guess : 'BJ';
+game.clock = () => World.clockString();
 game.creds = () => loadCreds();
 game.rerenderPhone = () => {
   if (panelOpen() === 'account') return refreshPanel();
@@ -802,7 +881,7 @@ net.on('profile', (m) => {
   const old = game.profile;
   game.profile = m.profile;
   me.character?.setSkin(m.profile.skin);
-  if (old && me.car && (old.skin.car !== m.profile.skin.car || old.skin.carColor !== m.profile.skin.carColor)) {
+  if (old && me.car && !me.carOverride && (old.skin.car !== m.profile.skin.car || old.skin.carColor !== m.profile.skin.carColor)) {
     if (old.skin.car !== m.profile.skin.car) {
       makeMyCar();
       me.drive.reset(me.yaw);
@@ -965,11 +1044,48 @@ net.on('banned', (m) => {
 });
 // Maisons
 net.on('houses', (m) => {
-  if (m.country !== game.country && m.country !== world.code) return;
-  game.houses = new Map(m.houses.map((x) => [x.lot, x]));
-  world.updateHouses(m.houses);
-  if (panelOpen() === 'house' || panelOpen() === 'family') refreshPanel();
+  (game.housesByCountry ??= new Map()).set(m.country, new Map(m.houses.map((x) => [x.lot, x])));
+  if (m.country === game.country || (!game.country && m.country === world.code)) {
+    game.houses = game.housesByCountry.get(m.country);
+    world.updateHouses(m.houses);
+  }
+  if (['house', 'family', 'phone'].includes(panelOpen())) refreshPanel();
 });
+net.on('houseEvents', (m) => {
+  if (game.phoneUi) game.phoneUi.events = m.events;
+  if (panelOpen() === 'phone') refreshPanel();
+});
+net.on('carParked', () => {
+  me.inCar = false;
+  me.carSpeed = 0;
+  if (me.car) me.car.visible = false;
+  me.carOverride = null;
+  unmount(me.character, scene);
+  engine.stop();
+  const lot = [...(game.houses?.keys() ?? [])].map((id) => LOT_BY_ID.get(id)).find((l) => Math.hypot(me.pos.x - l.garage.x, me.pos.z - l.garage.doorFront) < GARAGE_RADIUS + 2);
+  if (lot) me.pos.set(lot.garage.x + 3, 0, lot.garage.doorFront - lot.side * 2.5); // on descend devant le garage
+});
+net.on('carTaken', (m) => {
+  closePanel();
+  me.carOverride = { car: m.model, carColor: m.color };
+  makeMyCar(me.carOverride);
+  const lot = [...(game.houses?.keys() ?? [])].map((id) => LOT_BY_ID.get(id)).find((l) => Math.hypot(me.pos.x - l.garage.x, me.pos.z - l.garage.doorFront) < GARAGE_RADIUS + 2);
+  if (lot) {
+    me.pos.set(lot.garage.x, 0, lot.garage.doorFront - lot.side * 3);
+    me.yaw = lot.side < 0 ? 0 : Math.PI;
+  }
+  me.inCar = true;
+  me.drive.reset(me.yaw);
+  me.car.visible = true;
+  mount(me.character, me.car);
+  engine.start(me.car.userData.vehicle.electric);
+  if (m.borrowed) toast(`🔑 Tu empruntes le véhicule de ${m.owner}. Il retournera au garage quand tu descendras (V).`);
+});
+net.on('alarm', (m) => {
+  siren(engine);
+  toast(`🚨 Alarme ! Propriété privée de la famille « ${m.family} ».`, 'error');
+});
+addEventListener('phoneclosed', () => (game.cctv = null));
 net.on('teleport', (m) => {
   if (me.inCar) toggleCar();
   me.pos.set(m.x, 0, m.z);
