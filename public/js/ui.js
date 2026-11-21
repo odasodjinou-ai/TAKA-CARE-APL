@@ -45,6 +45,7 @@ export function openPanel(id, title, render) {
   currentPanel = id;
   renderCurrent = render;
   $('#panel-title').textContent = title;
+  document.querySelector('.panel-card').classList.toggle('wide', id === 'admin');
   $('#panel').classList.remove('hidden');
   refreshPanel();
 }
@@ -731,5 +732,140 @@ PANELS.account = (game) => {
         'Se déconnecter',
       ),
     ),
+  );
+};
+
+// --- Administration : signalements et sanctions ----------------------------------------------------
+const fmtDate = (t) => new Date(t).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' });
+const ACTION_LABEL = { dismiss: 'Classé sans suite', warn: 'Avertissement', mute: 'Silence', unmute: 'Silence levé', ban: 'Bannissement', unban: 'Bannissement levé' };
+
+function playerBadges(t) {
+  return [
+    h('span', { class: `dot ${t.online ? 'on' : ''}`, title: t.online ? 'En ligne' : 'Hors ligne' }),
+    t.isAdmin ? h('span', { class: 'status review' }, 'Admin') : null,
+    t.ban ? h('span', { class: 'status failed' }, t.ban.until ? `Banni → ${fmtDate(t.ban.until)}` : 'Banni définitivement') : null,
+    t.mutedUntil ? h('span', { class: 'status pending' }, `Silence → ${fmtDate(t.mutedUntil)}`) : null,
+  ];
+}
+
+PANELS.admin = (game) => {
+  const a = (game.admin ??= { tab: 'open', open: null, handled: null, search: null, log: null, player: null, playerData: null, q: '' });
+  const load = (tab) => {
+    if (tab === 'open' || tab === 'handled') game.net.send('adminReports', { status: tab });
+    if (tab === 'log') game.net.send('adminLog');
+  };
+  const tab = (k, label) => h('button', { class: `btn ${a.tab === k && !a.player ? 'active' : ''}`, onclick: () => ((a.tab = k), (a.player = null), load(k), refreshPanel()) }, label);
+  const openPlayer = (id) => {
+    a.player = id;
+    a.playerData = null;
+    game.net.send('adminPlayer', { id });
+    refreshPanel();
+  };
+  if (a[a.tab] === null && !a.player) load(a.tab);
+
+  const header = h('div', { class: 'tabs' }, tab('open', `🚩 À traiter (${game.adminOpenCount ?? 0})`), tab('handled', '✅ Traités'), tab('search', '🔎 Joueurs'), tab('log', '📜 Journal'));
+
+  // --- Dossier d'un joueur ---
+  if (a.player) {
+    const d = a.playerData;
+    if (!d || d.player.id !== a.player) return h('div', {}, header, h('p', { class: 'muted' }, 'Chargement du dossier…'));
+    const t = d.player;
+    const reason = h('input', { placeholder: 'Motif (obligatoire pour avertir, mettre en silence ou bannir)', maxlength: 200 });
+    const muteDur = h('select', {}, ['1h', '24h', '7j', '30j'].map((k) => h('option', { value: k }, k)));
+    const banDur = h('select', {}, ['24h', '7j', '30j', 'permanent'].map((k) => h('option', { value: k }, k === 'permanent' ? 'définitif' : k)));
+    const act = (action, duration) => {
+      if (action === 'ban' && !confirm(`Bannir ${t.name} (${duration === 'permanent' ? 'définitivement' : duration}) ?`)) return;
+      game.net.send('adminAction', { target: t.id, action, duration, reason: reason.value });
+    };
+    const open = d.reports.filter((r) => r.status === 'open');
+    return h(
+      'div',
+      {},
+      header,
+      h('button', { class: 'btn ghost', onclick: () => ((a.player = null), load(a.tab), refreshPanel()) }, '← Retour'),
+      h('h3', {}, ...playerBadges(t), ' ', t.name),
+      h('p', { class: 'muted' }, `Inscrit le ${fmtDate(t.createdAt)} · ${t.phone ?? 'compte invité (sans numéro)'}${t.family ? ` · famille « ${t.family} »` : ''} · ${t.stats?.missions ?? 0} missions · silences reçus : ${t.mutes} · signalements faits : ${d.reportsMade}`),
+      t.isAdmin
+        ? h('p', { class: 'muted' }, 'Administrateur : aucune sanction possible.')
+        : h(
+            'div',
+            { class: 'premium-card' },
+            reason,
+            h(
+              'div',
+              { class: 'row' },
+              h('button', { class: 'btn', onclick: () => act('warn') }, '⚠️ Avertir'),
+              h('span', {}, muteDur, ' ', h('button', { class: 'btn', onclick: () => act('mute', muteDur.value) }, '🔇 Silence')),
+              h('span', {}, banDur, ' ', h('button', { class: 'btn danger', onclick: () => act('ban', banDur.value) }, '⛔ Bannir')),
+            ),
+            h(
+              'div',
+              { class: 'row' },
+              open.length ? h('button', { class: 'btn ghost', onclick: () => act('dismiss') }, `Classer sans suite (${open.length})`) : null,
+              t.mutedUntil ? h('button', { class: 'btn ghost', onclick: () => act('unmute') }, 'Lever le silence') : null,
+              t.ban ? h('button', { class: 'btn ghost', onclick: () => act('unban') }, 'Lever le bannissement') : null,
+            ),
+          ),
+      h('div', { class: 'region-title' }, `Signalements reçus (${d.reports.length})`),
+      d.reports.length
+        ? h('ul', { class: 'list' }, d.reports.map((r) => h('li', {}, h('div', {}, h('b', {}, `« ${r.text} »`), h('div', { class: 'meta' }, `${fmtDate(r.at)} · signalé par ${r.by}${r.handledBy ? ` · ${ACTION_LABEL[r.action] ?? r.action} par ${r.handledBy}` : ''}`)), h('span', { class: `status ${r.status === 'open' ? 'pending' : r.status === 'dismissed' ? 'review' : 'paid'}` }, r.status === 'open' ? 'À traiter' : r.status === 'dismissed' ? 'Classé' : 'Traité'))))
+        : h('p', { class: 'muted' }, 'Aucun.'),
+      h('div', { class: 'region-title' }, 'Derniers messages (depuis le démarrage du serveur)'),
+      d.recentMessages.length ? h('ul', { class: 'list' }, d.recentMessages.map((m) => h('li', {}, h('span', {}, m.text), h('span', { class: 'meta' }, fmtDate(m.at))))) : h('p', { class: 'muted' }, 'Aucun message récent.'),
+      h('div', { class: 'region-title' }, 'Historique des sanctions'),
+      d.audit.length ? h('ul', { class: 'list' }, d.audit.map((e) => h('li', {}, h('div', {}, h('b', {}, ACTION_LABEL[e.action] ?? e.action), e.duration ? ` (${e.duration})` : '', h('div', { class: 'meta' }, `${fmtDate(e.at)} · par ${e.admin}${e.reason ? ` · ${e.reason}` : ''}`))))) : h('p', { class: 'muted' }, 'Aucune sanction.'),
+    );
+  }
+
+  // --- Listes ---
+  if (a.tab === 'search') {
+    const input = h('input', { placeholder: 'Pseudo du joueur (2 lettres minimum)', value: a.q, oninput: (e) => ((a.q = e.target.value), game.net.send('adminSearch', { q: a.q })) });
+    setTimeout(() => {
+      input.focus();
+      input.setSelectionRange(a.q.length, a.q.length);
+    }, 0);
+    return h(
+      'div',
+      {},
+      header,
+      input,
+      a.search?.length
+        ? h('ul', { class: 'list' }, a.search.map((t) => h('li', { style: 'cursor:pointer', onclick: () => openPlayer(t.id) }, h('div', {}, ...playerBadges(t), ' ', h('b', {}, t.name), h('div', { class: 'meta' }, t.phone ?? 'invité')), h('span', { class: 'meta' }, 'Ouvrir →'))))
+        : h('p', { class: 'muted' }, a.q.length >= 2 ? 'Aucun joueur trouvé.' : 'Recherche un joueur pour consulter son dossier ou le sanctionner sans signalement.'),
+    );
+  }
+  if (a.tab === 'log') {
+    return h(
+      'div',
+      {},
+      header,
+      !a.log
+        ? h('p', { class: 'muted' }, 'Chargement…')
+        : a.log.length
+          ? h('ul', { class: 'list' }, a.log.map((e) => h('li', { style: 'cursor:pointer', onclick: () => openPlayer(e.target) }, h('div', {}, h('b', {}, `${ACTION_LABEL[e.action] ?? e.action}${e.duration ? ` (${e.duration})` : ''}`), ' — ', e.targetName, h('div', { class: 'meta' }, `${fmtDate(e.at)} · par ${e.admin}${e.reason ? ` · ${e.reason}` : ''}${e.reportsClosed ? ` · ${e.reportsClosed} signalement(s) clos` : ''}`)))))
+          : h('p', { class: 'muted' }, 'Aucune action pour l\'instant.'),
+    );
+  }
+  const groups = a[a.tab];
+  return h(
+    'div',
+    {},
+    header,
+    !groups
+      ? h('p', { class: 'muted' }, 'Chargement…')
+      : groups.length === 0
+        ? h('p', { class: 'muted' }, a.tab === 'open' ? '🎉 Aucun signalement en attente.' : 'Aucun signalement traité.')
+        : h(
+            'ul',
+            { class: 'list', style: 'max-height:none' },
+            groups.map((g) =>
+              h(
+                'li',
+                { style: 'display:block' },
+                h('div', { class: 'row', style: 'justify-content:space-between;margin:0' }, h('div', {}, ...playerBadges(g.target), ' ', h('b', {}, g.target.name), h('span', { class: 'meta' }, ` · ${g.count} signalement(s) par ${g.reporters} joueur(s) · dernier ${fmtDate(g.last)}`)), h('button', { class: 'btn blue', onclick: () => openPlayer(g.target.id) }, 'Ouvrir le dossier')),
+                h('ul', { class: 'meta', style: 'margin:6px 0 0;padding-left:18px' }, g.reports.slice(0, 3).map((r) => h('li', {}, `« ${r.text} » — ${r.by}, ${fmtDate(r.at)}${r.handledBy ? ` · ${ACTION_LABEL[r.action] ?? r.action} par ${r.handledBy}` : ''}`))),
+              ),
+            ),
+          ),
   );
 };

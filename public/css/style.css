@@ -172,3 +172,6 @@ kbd { background: #1e293b; border: 1px solid var(--border); border-radius: 5px; 
 #chat-log > div:hover .chat-act, .touch-on .chat-act { opacity: 0.9; }
 #chat-log .filtered { color: #94a3b8; }
 #chat-log .premium { margin-right: 2px; }
+.panel-card.wide { width: min(900px, 100%); }
+.premium-card .row > span { display: inline-flex; gap: 6px; align-items: center; }
+.premium-card .row > span select { width: auto; margin-top: 0; }

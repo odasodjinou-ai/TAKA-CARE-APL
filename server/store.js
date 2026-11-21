@@ -26,6 +26,9 @@ export class Store {
         this.data.families = parsed.families ?? {};
         this.data.orders = parsed.orders ?? {};
         this.data.counters = parsed.counters ?? {};
+        this.data.reports = parsed.reports ?? [];
+        this.data.audit = parsed.audit ?? [];
+        for (const r of this.data.reports) r.id ??= crypto.randomUUID();
         for (const p of Object.values(this.data.players)) migratePlayer(p);
       } catch (err) {
         // On ne détruit jamais une sauvegarde illisible : on la met de côté.

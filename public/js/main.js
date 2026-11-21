@@ -183,6 +183,7 @@ const PANEL_TITLES = {
   help: '❔ Aide',
   vida: '💎 Vida & Premium',
   account: '👤 Mon compte',
+  admin: '🛡️ Modération',
 };
 
 function togglePanel(id, title = PANEL_TITLES[id]) {
@@ -909,6 +910,43 @@ net.on('paid', onOrder);
 net.on('receipts', (m) => {
   payState().receipts = m.orders;
   if (panelOpen() === 'vida') refreshPanel();
+});
+// Administration
+const adminRefresh = () => panelOpen() === 'admin' && refreshPanel();
+net.on('adminBadge', (m) => {
+  game.adminOpenCount = m.openCount;
+  const b = $('#btn-admin');
+  b.classList.remove('hidden');
+  b.firstChild.textContent = m.openCount ? `🛡️${m.openCount}` : '🛡️';
+  if (game.admin && !game.admin.player) {
+    game.admin.open = null; // la liste sera rechargée
+    if (panelOpen() === 'admin' && game.admin.tab === 'open') net.send('adminReports', { status: 'open' });
+  }
+});
+net.on('adminReports', (m) => {
+  (game.admin ??= {})[m.status] = m.groups;
+  game.adminOpenCount = m.openCount;
+  adminRefresh();
+});
+net.on('adminPlayer', (m) => {
+  game.admin.playerData = m;
+  adminRefresh();
+});
+net.on('adminSearch', (m) => {
+  game.admin.search = m.players;
+  adminRefresh();
+});
+net.on('adminLog', (m) => {
+  game.admin.log = m.entries;
+  adminRefresh();
+});
+net.on('banned', (m) => {
+  net.close();
+  game.room = null;
+  $('#hud').classList.add('hidden');
+  closePanel();
+  showScreen('login');
+  $('#login-status').textContent = `⛔ Ce compte est banni ${m.until ? `jusqu'au ${new Date(m.until).toLocaleString('fr-FR')}` : 'définitivement'}. Motif : ${m.reason}`;
 });
 net.on('toast', (m) => toast(m.message, m.kind));
 net.on('error', (m) => {

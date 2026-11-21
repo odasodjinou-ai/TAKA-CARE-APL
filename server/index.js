@@ -180,7 +180,8 @@ const payments = new PaymentService(store, providers, { publicUrl: PUBLIC_URL, o
 const sms = createSmsProvider(process.env);
 const otp = new OtpService(sms);
 console.log(`Connexion par SMS : ${sms ? sms.label : 'désactivée (configure un fournisseur SMS, voir README)'}`);
-game = new Game(store, { payments, otp });
+game = new Game(store, { payments, otp, adminPhones: process.env.ADMIN_PHONES ?? '' });
+console.log(`Administrateurs : ${game.adminPhones.size} numéro(s) dans ADMIN_PHONES`);
 const active = Object.values(providers).filter((p) => p.enabled).map((p) => p.label);
 console.log(`Paiements actifs : ${active.length ? active.join(', ') : 'aucun (configure les clés, voir README)'}`);
 if (providers.sandbox.enabled) console.warn('⚠️  Mode PAYMENTS_SANDBOX actif : paiements simulés, à ne jamais utiliser en production.');

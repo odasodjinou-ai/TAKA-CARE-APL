@@ -46,7 +46,9 @@ const ALLOW_LIST = ALLOW.map(normalize);
 
 function severityOf(word) {
   if (!word) return 0;
-  const candidates = [word, word.replace(/(.)\1/g, '$1')]; // « connard » et « conard »
+  const single = word.replace(/(.)\1/g, '$1'); // « connard » et « conard »
+  // Pluriels : « idiots », « bâtards », « cons »
+  const candidates = [word, single, ...[word, single].filter((w) => w.length > 3 && /[sx]$/.test(w)).map((w) => w.slice(0, -1))];
   let best = 0;
   for (const w of candidates) {
     best = Math.max(best, EXACT_MAP.get(w) ?? 0);

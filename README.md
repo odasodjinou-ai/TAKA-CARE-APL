@@ -73,6 +73,17 @@ Pour réduire les coûts à grande échelle, un agrégateur local s'ajoute facil
 - **🚫 Bloquer** un joueur : ses messages disparaissent pour toi (liste gérable dans *Mon compte*).
 - **Pseudos et noms de famille** injurieux refusés.
 
+### Écran d'administration 🛡️
+Réservé aux numéros listés dans `ADMIN_PHONES` (l'administrateur se connecte avec son numéro et le code
+SMS ; aucun mot de passe supplémentaire, droits revérifiés par le serveur à chaque action).
+- **À traiter** : signalements regroupés par joueur, triés par nombre de joueurs différents qui l'ont signalé ;
+  pastille sur le bouton et alerte en direct à chaque nouveau signalement.
+- **Dossier joueur** : messages signalés et récents, historique des sanctions, numéro masqué.
+- **Actions** (motif obligatoire, montré au joueur) : avertir, silence 1 h / 24 h / 7 j / 30 j, bannir 24 h /
+  7 j / 30 j / définitivement (expulsion immédiate, reconnexion refusée), classer sans suite, lever
+  silence ou bannissement. Un administrateur ne peut pas sanctionner un autre administrateur.
+- **Joueurs** : recherche par pseudo pour agir sans signalement. **Journal** : qui a fait quoi, quand, pourquoi.
+
 Les listes de mots sont dans `server/moderation.js` (catégories gravité 1 et 2, plus une liste
 d'exceptions). Tu peux y ajouter des insultes en fon, yoruba, dendi… : ajoute-les, relance `npm test`
 (la suite vérifie l'absence de faux positifs sur des phrases courantes).
@@ -119,7 +130,7 @@ branchée ici.
 
 ```
 server/   index.js (HTTP + WebSocket + routes /pay et /receipt) · game.js (règles) · store.js (persistance)
-server/moderation.js   filtre d'insultes, sanctions
+server/moderation.js   filtre d'insultes, sanctions · admin.js (écran de modération)
 server/auth/   otp.js (codes à usage unique) · sms.js (Africa's Talking, Twilio, mode dev)
 server/payments/   providers.js (FedaPay, Wave, CinetPay, PayPal, simulation) · service.js (commandes) · pages.js (reçus)
 shared/   countries.js · layout.js (carte déterministe) · catalog.js (économie) · vehicles.js (catalogue)

@@ -23,6 +23,9 @@ test('insultes détectées malgré les contournements', () => {
     'what the fuck',
     'you bitch',
     'putain de merde',
+    'vous êtes des idiots',
+    'bande de crétins',
+    'les bouffons',
   ];
   for (const t of insults) assert.ok(moderate(t).severity >= 1, `non détecté : « ${t} »`);
 });

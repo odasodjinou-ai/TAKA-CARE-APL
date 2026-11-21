@@ -23,6 +23,7 @@ import { UserError } from './payments/service.js';
 import { normalizePhone, maskPhone } from './auth/otp.js';
 import { moderate, isOffensiveName, addStrike, mutedUntil, SANCTIONS } from './moderation.js';
 import crypto from 'node:crypto';
+import { ADMIN_HANDLERS, AdminMixin, parseAdminPhones, isBanned } from './admin.js';
 
 export const ROOMS = [
   { id: 'afrique-1', name: 'Afrique #1', max: 40 },
@@ -48,10 +49,11 @@ const cleanText = (s, max) =>
 
 export class Game {
   /** @param {import('./store.js').Store} store */
-  constructor(store, { tickMs = TICK_MS, flightMs = FLIGHT_DURATION_MS, now = () => Date.now(), payments = null, otp = null } = {}) {
+  constructor(store, { tickMs = TICK_MS, flightMs = FLIGHT_DURATION_MS, now = () => Date.now(), payments = null, otp = null, adminPhones = '' } = {}) {
     this.store = store;
     this.payments = payments;
     this.otp = otp;
+    this.adminPhones = adminPhones instanceof Set ? adminPhones : parseAdminPhones(adminPhones);
     this.chatLog = []; // 500 derniers messages (pour les signalements)
     this.nextMsgId = 1;
     this.keySecret = crypto.randomBytes(16);
@@ -154,6 +156,11 @@ export class Game {
 
   /** Ouvre la session d'un joueur authentifié (une seule session active par compte). */
   login(client, profile, newToken) {
+    const ban = isBanned(profile, this.now());
+    if (ban) {
+      this.send(client, 'banned', { reason: ban.reason, until: ban.until });
+      return client.ws.close?.();
+    }
     const existing = this.findOnline(profile.id);
     if (existing && existing !== client) {
       this.send(existing, 'kicked', { reason: 'Connexion depuis un autre appareil ou onglet.' });
@@ -162,6 +169,7 @@ export class Game {
     }
     client.profile = profile;
     this.send(client, 'welcome', { id: profile.id, token: newToken, profile: this.profileView(profile), rooms: this.roomList(), sid: client.sid, sms: !!this.otp?.available, key: this.playerKey(profile) });
+    if (this.isAdminProfile(profile)) this.send(client, 'adminBadge', { openCount: (this.store.data.reports ?? []).filter((r) => r.status === 'open').length });
   }
 
   /** Appelé par le service de paiement quand une commande est confirmée. */
@@ -199,6 +207,7 @@ export class Game {
       name: p.name,
       phone: maskPhone(p.phone),
       devices: p.tokenHashes.length,
+      isAdmin: this.isAdminProfile(p),
       money: p.money,
       vida: p.vida,
       vidaLog: p.vidaLog.slice(0, 20),
@@ -335,6 +344,8 @@ export class Game {
     this.send(client, 'mission', { mission: client.mission });
   }
 }
+
+Object.assign(Game.prototype, AdminMixin);
 
 // --- Gestionnaires de messages -------------------------------------------------
 const PUBLIC_MESSAGES = new Set(['hello', 'otpRequest', 'otpVerify', 'smsInfo']);
@@ -485,10 +496,11 @@ const HANDLERS = {
     const reports = (this.store.data.reports ??= []);
     if (reports.some((r) => r.msgId === id && r.by === client.profile.id)) return this.toast(client, 'Déjà signalé, merci.');
     if (reports.filter((r) => r.by === client.profile.id && this.now() - r.at < 3_600_000).length >= 10) return this.error(client, 'Trop de signalements cette heure-ci.');
-    reports.push({ msgId: id, by: client.profile.id, byName: client.profile.name, target: entry.playerId, targetName: entry.name, text: entry.text, reason: cleanText(reason ?? '', 100), at: this.now(), status: 'open' });
+    reports.push({ id: crypto.randomUUID(), msgId: id, room: entry.room, by: client.profile.id, byName: client.profile.name, target: entry.playerId, targetName: entry.name, text: entry.text, reason: cleanText(reason ?? '', 100), at: this.now(), status: 'open' });
     if (reports.length > 5000) reports.splice(0, reports.length - 5000);
     this.store.save();
     console.warn(`[modération] Signalement de ${client.profile.name} contre ${entry.name} : « ${entry.text} »`);
+    this.notifyAdmins({ targetName: entry.name });
     // Plusieurs signalements distincts sur un même joueur en peu de temps : avertissement automatique
     const recent = new Set(reports.filter((r) => r.target === entry.playerId && this.now() - r.at < SANCTIONS.windowMs).map((r) => r.by));
     if (recent.size >= 3) {
@@ -728,3 +740,5 @@ const HANDLERS = {
     }
   },
 };
+
+Object.assign(HANDLERS, ADMIN_HANDLERS);
