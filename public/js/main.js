@@ -724,6 +724,7 @@ net.on('welcome', (m) => {
   }
   game.profile = m.profile;
   game.sid = m.sid;
+  game.myKey = m.key;
   game.phone = null;
   if (m.sms !== undefined) game.smsAvailable = m.sms;
   $('#login-status').textContent = '';
@@ -822,9 +823,54 @@ net.on('flight', (m) => {
   $('#hud').classList.add('hidden');
   cinematic = { t: 0, ms: m.ms, cruise: false };
 });
+// Joueurs bloqués (liste propre à cet appareil)
+const BLOCK_KEY = 'terravida:blocked';
+game.blocked = (() => {
+  try {
+    return new Map(JSON.parse(localStorage.getItem(BLOCK_KEY)) ?? []);
+  } catch {
+    return new Map();
+  }
+})();
+game.saveBlocked = () => {
+  try {
+    localStorage.setItem(BLOCK_KEY, JSON.stringify([...game.blocked]));
+  } catch {
+    /* stockage indisponible : la liste reste valable pour cette session */
+  }
+};
 net.on('chat', (m) => {
+  if (m.sys) return chatLine('sys', m.text);
+  if (game.blocked.has(m.key)) return;
   const c = COUNTRY_BY_CODE.get(m.country);
-  chatLine(m.ch === 'family' ? 'fam' : '', m.ch === 'family' ? '[Famille] ' : c ? `${c.flag} ` : '', h('b', {}, m.from), ` : ${m.text}`);
+  const mine = m.key === game.myKey;
+  const actions = mine
+    ? []
+    : [
+        h('button', { class: 'chat-act', title: 'Signaler ce message', onclick: () => confirm(`Signaler le message de ${m.from} pour insulte ou harcèlement ?`) && net.send('report', { id: m.id }) }, '🚩'),
+        h(
+          'button',
+          {
+            class: 'chat-act',
+            title: 'Bloquer ce joueur',
+            onclick: () => {
+              if (!confirm(`Bloquer ${m.from} ? Tu ne verras plus ses messages.`)) return;
+              game.blocked.set(m.key, m.from);
+              game.saveBlocked();
+              toast(`🚫 ${m.from} est bloqué. Tu peux le débloquer dans Mon compte.`);
+            },
+          },
+          '🚫',
+        ),
+      ];
+  chatLine(
+    `${m.ch === 'family' ? 'fam' : ''}${m.filtered ? ' filtered' : ''}`,
+    m.ch === 'family' ? '[Famille] ' : c ? `${c.flag} ` : '',
+    m.premium ? h('span', { class: 'premium' }, '⭐') : null,
+    h('b', {}, m.from),
+    ` : ${m.text}`,
+    ...actions,
+  );
 });
 net.on('familyInvite', (m) => {
   toast(`${m.from} t'invite dans la famille « ${m.name} »`, 'info', { label: 'Accepter', fn: () => net.send('familyAccept', { familyId: m.familyId }) });

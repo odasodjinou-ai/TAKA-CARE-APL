@@ -704,6 +704,16 @@ PANELS.account = (game) => {
           h('p', { style: 'margin-top:0' }, h('b', {}, '⚠️ Compte invité'), ' : si tu changes de téléphone ou effaces ton navigateur, tu perds tout. Lie ton numéro pour sécuriser ton compte (obligatoire pour acheter des Vida).'),
           phoneFlow(game, 'link'),
         ),
+    h('div', { class: 'region-title' }, `Joueurs bloqués : ${game.blocked?.size ?? 0}`),
+    game.blocked?.size
+      ? h(
+          'ul',
+          { class: 'list' },
+          [...game.blocked].map(([key, name]) =>
+            h('li', {}, name, h('button', { class: 'btn', onclick: () => (game.blocked.delete(key), game.saveBlocked(), refreshPanel()) }, 'Débloquer')),
+          ),
+        )
+      : h('p', { class: 'muted' }, 'Personne. Utilise 🚫 à côté d\'un message du chat pour ne plus voir un joueur, et 🚩 pour signaler une insulte.'),
     h('div', { class: 'region-title' }, `Appareils connectés : ${p.devices}`),
     h(
       'div',

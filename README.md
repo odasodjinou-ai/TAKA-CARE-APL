@@ -60,6 +60,23 @@ Commandes : ZQSD/WASD/flèches, souris pour la caméra, Maj courir, Espace saute
 Pour réduire les coûts à grande échelle, un agrégateur local s'ajoute facilement dans
 `server/auth/sms.js` (une fonction `send(numéro, message)`).
 
+## Modération du chat
+
+- **Filtre d'insultes** côté serveur (impossible à contourner depuis le navigateur), français et anglais :
+  résiste aux accents, chiffres (`c0nn4rd`), lettres répétées (`connnnard`) ou séparées (`c o n n a r d`),
+  sans toucher aux mots innocents (`conduire`, `en retard`, `violon`, `Mongolie`…). Les mots fautifs sont
+  remplacés par `***`, les phrases haineuses entièrement masquées.
+- **Sanctions automatiques** : 3 points d'avertissement en 30 min → silence de **5 min**, puis **30 min**, puis
+  **24 h** pour les récidivistes. Racisme, homophobie et menaces comptent double.
+- **🚩 Signaler** un message (le texte original est conservé dans `data/db.json` → `reports` pour une revue
+  humaine) ; 3 joueurs différents qui signalent la même personne déclenchent un avertissement.
+- **🚫 Bloquer** un joueur : ses messages disparaissent pour toi (liste gérable dans *Mon compte*).
+- **Pseudos et noms de famille** injurieux refusés.
+
+Les listes de mots sont dans `server/moderation.js` (catégories gravité 1 et 2, plus une liste
+d'exceptions). Tu peux y ajouter des insultes en fon, yoruba, dendi… : ajoute-les, relance `npm test`
+(la suite vérifie l'absence de faux positifs sur des phrases courantes).
+
 ## Paiements (Vida)
 
 ### Comment ça marche
@@ -102,6 +119,7 @@ branchée ici.
 
 ```
 server/   index.js (HTTP + WebSocket + routes /pay et /receipt) · game.js (règles) · store.js (persistance)
+server/moderation.js   filtre d'insultes, sanctions
 server/auth/   otp.js (codes à usage unique) · sms.js (Africa's Talking, Twilio, mode dev)
 server/payments/   providers.js (FedaPay, Wave, CinetPay, PayPal, simulation) · service.js (commandes) · pages.js (reçus)
 shared/   countries.js · layout.js (carte déterministe) · catalog.js (économie) · vehicles.js (catalogue)

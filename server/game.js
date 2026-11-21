@@ -21,6 +21,8 @@ import {
 import { VEHICLE_BY_ID, MAX_VEHICLE_SPEED } from '../shared/vehicles.js';
 import { UserError } from './payments/service.js';
 import { normalizePhone, maskPhone } from './auth/otp.js';
+import { moderate, isOffensiveName, addStrike, mutedUntil, SANCTIONS } from './moderation.js';
+import crypto from 'node:crypto';
 
 export const ROOMS = [
   { id: 'afrique-1', name: 'Afrique #1', max: 40 },
@@ -50,6 +52,9 @@ export class Game {
     this.store = store;
     this.payments = payments;
     this.otp = otp;
+    this.chatLog = []; // 500 derniers messages (pour les signalements)
+    this.nextMsgId = 1;
+    this.keySecret = crypto.randomBytes(16);
     this.flightMs = flightMs;
     this.now = now;
     this.nextSid = 1;
@@ -142,6 +147,11 @@ export class Game {
     }
   }
 
+  /** Identifiant public stable d'un joueur (pour bloquer/signaler) sans exposer son id de compte. */
+  playerKey(profile) {
+    return crypto.createHmac('sha256', this.keySecret).update(profile.id).digest('base64url').slice(0, 12);
+  }
+
   /** Ouvre la session d'un joueur authentifié (une seule session active par compte). */
   login(client, profile, newToken) {
     const existing = this.findOnline(profile.id);
@@ -151,7 +161,7 @@ export class Game {
       existing.ws.close();
     }
     client.profile = profile;
-    this.send(client, 'welcome', { id: profile.id, token: newToken, profile: this.profileView(profile), rooms: this.roomList(), sid: client.sid, sms: !!this.otp?.available });
+    this.send(client, 'welcome', { id: profile.id, token: newToken, profile: this.profileView(profile), rooms: this.roomList(), sid: client.sid, sms: !!this.otp?.available, key: this.playerKey(profile) });
   }
 
   /** Appelé par le service de paiement quand une commande est confirmée. */
@@ -344,6 +354,7 @@ const HANDLERS = {
       }
       const clean = cleanText(name ?? '', 16);
       if (!NAME_RE.test(clean)) return this.error(client, 'Pseudo invalide (2 à 16 lettres, chiffres, espaces, _ ou -).');
+      if (isOffensiveName(clean)) return this.error(client, 'Ce pseudo n\'est pas autorisé. Choisis un pseudo respectueux.');
       if (!isCountry(home)) return this.error(client, 'Pays d\'origine invalide.');
       ({ player: profile, token: newToken } = this.store.createPlayer(clean, home, phone));
     }
@@ -438,17 +449,55 @@ const HANDLERS = {
   chat(client, { text, ch }) {
     const now = this.now();
     if (now - client.lastChatAt < 700) return;
-    const clean = cleanText(text ?? '', 200);
-    if (!clean) return;
+    const raw = cleanText(text ?? '', 200);
+    if (!raw) return;
+    const p = client.profile;
+    const muted = mutedUntil(p, now);
+    if (muted) return this.error(client, `🔇 Tu ne peux pas écrire avant ${new Date(muted).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })} (propos insultants).`);
     client.lastChatAt = now;
-    const msg = { from: client.profile.name, text: clean, ch: ch === 'family' ? 'family' : 'all', country: client.zone };
-    if (msg.ch === 'family') {
-      const fam = this.store.getFamily(client.profile.familyId);
-      if (!fam) return this.error(client, 'Tu n\'as pas de famille.');
+    const mod = moderate(raw);
+    const fam = ch === 'family' ? this.store.getFamily(p.familyId) : null;
+    if (ch === 'family' && !fam) return this.error(client, 'Tu n\'as pas de famille.');
+    const msg = { id: this.nextMsgId++, from: p.name, key: this.playerKey(p), text: mod.clean, ch: fam ? 'family' : 'all', country: client.zone, premium: isPremium(p, now), filtered: mod.severity > 0 };
+    this.chatLog.push({ id: msg.id, playerId: p.id, name: p.name, text: raw, at: now, room: client.room?.id });
+    if (this.chatLog.length > 500) this.chatLog.shift();
+    if (fam) {
       for (const c of this.clients) if (c.profile && fam.members.includes(c.profile.id)) this.send(c, 'chat', msg);
     } else if (client.room) {
       for (const c of client.room.clients) this.send(c, 'chat', msg);
     }
+    if (mod.severity > 0) {
+      const res = addStrike(p, mod.severity, now);
+      this.store.save();
+      if (res.mutedUntil) {
+        const min = Math.round((res.mutedUntil - now) / 60_000);
+        this.toast(client, `🔇 Propos insultants répétés : silence pendant ${min >= 60 ? `${Math.round(min / 60)} h` : `${min} min`}.`, 'error');
+        if (client.room) for (const c of client.room.clients) if (c !== client) this.send(c, 'chat', { id: this.nextMsgId++, sys: true, text: `${p.name} a été réduit au silence pour insultes.` });
+      } else {
+        this.toast(client, `⚠️ Message filtré : reste respectueux (avertissement ${res.points}/${SANCTIONS.threshold}).`, 'warn');
+      }
+    }
+  },
+
+  report(client, { id, reason }) {
+    const entry = this.chatLog.find((m) => m.id === id);
+    if (!entry || entry.playerId === client.profile.id) return;
+    const reports = (this.store.data.reports ??= []);
+    if (reports.some((r) => r.msgId === id && r.by === client.profile.id)) return this.toast(client, 'Déjà signalé, merci.');
+    if (reports.filter((r) => r.by === client.profile.id && this.now() - r.at < 3_600_000).length >= 10) return this.error(client, 'Trop de signalements cette heure-ci.');
+    reports.push({ msgId: id, by: client.profile.id, byName: client.profile.name, target: entry.playerId, targetName: entry.name, text: entry.text, reason: cleanText(reason ?? '', 100), at: this.now(), status: 'open' });
+    if (reports.length > 5000) reports.splice(0, reports.length - 5000);
+    this.store.save();
+    console.warn(`[modération] Signalement de ${client.profile.name} contre ${entry.name} : « ${entry.text} »`);
+    // Plusieurs signalements distincts sur un même joueur en peu de temps : avertissement automatique
+    const recent = new Set(reports.filter((r) => r.target === entry.playerId && this.now() - r.at < SANCTIONS.windowMs).map((r) => r.by));
+    if (recent.size >= 3) {
+      const target = this.store.getPlayer(entry.playerId);
+      const res = addStrike(target, 1, this.now());
+      const tc = this.findOnline(entry.playerId);
+      if (tc) this.toast(tc, res.mutedUntil ? '🔇 Plusieurs joueurs t\'ont signalé : tu es réduit au silence.' : '⚠️ Plusieurs joueurs t\'ont signalé. Reste respectueux.', 'warn');
+    }
+    this.toast(client, '🚩 Signalement envoyé. Merci de garder Terra Vida agréable !', 'success');
   },
 
   skin(client, { skin }) {
@@ -608,6 +657,7 @@ const HANDLERS = {
     const clean = cleanText(name ?? '', 20);
     if (p.familyId) return this.error(client, 'Tu fais déjà partie d\'une famille.');
     if (!FAMILY_RE.test(clean)) return this.error(client, 'Nom de famille invalide (3 à 20 caractères).');
+    if (isOffensiveName(clean)) return this.error(client, 'Ce nom de famille n\'est pas autorisé.');
     if (this.store.familyNameTaken(clean)) return this.error(client, 'Ce nom de famille est déjà pris.');
     if (p.money < FAMILY_CREATION_COST) return this.error(client, `Créer une famille coûte ${formatMoney(FAMILY_CREATION_COST)}.`);
     p.money -= FAMILY_CREATION_COST;

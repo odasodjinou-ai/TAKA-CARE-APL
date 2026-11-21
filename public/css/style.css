@@ -166,3 +166,9 @@ kbd { background: #1e293b; border: 1px solid var(--border); border-radius: 5px; 
 .sticky { position: sticky; top: 0; z-index: 1; background: #0f172a; padding-bottom: 4px; }
 .row.nowrap { flex-wrap: nowrap; }
 .row.nowrap > * { margin-top: 6px; }
+
+/* --- Modération du chat --- */
+.chat-act { border: 0; background: none; cursor: pointer; padding: 0 3px; opacity: 0.35; font-size: 0.8rem; }
+#chat-log > div:hover .chat-act, .touch-on .chat-act { opacity: 0.9; }
+#chat-log .filtered { color: #94a3b8; }
+#chat-log .premium { margin-right: 2px; }
