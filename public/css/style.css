@@ -1,0 +1,145 @@
+:root {
+  --bg: #0b1220;
+  --panel: rgba(15, 23, 42, 0.82);
+  --border: rgba(148, 163, 184, 0.25);
+  --text: #f1f5f9;
+  --muted: #94a3b8;
+  --accent: #22c55e;
+  --accent-2: #0ea5e9;
+  --warn: #f59e0b;
+  --danger: #ef4444;
+  --radius: 14px;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--text); }
+button, input, select { font: inherit; color: inherit; }
+.hidden { display: none !important; }
+.muted { color: var(--muted); font-size: 0.9em; }
+
+#game { position: fixed; inset: 0; }
+#game canvas { display: block; touch-action: none; }
+.labels { position: fixed; inset: 0; pointer-events: none; }
+
+/* --- Écrans --- */
+.screen {
+  position: fixed; inset: 0; display: grid; place-items: center; padding: 16px; z-index: 20;
+  background: radial-gradient(1200px 600px at 20% 10%, #1e3a8a55, transparent), radial-gradient(900px 500px at 90% 90%, #16653455, transparent), #0b1220cc;
+  backdrop-filter: blur(6px);
+}
+.card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 24px; width: min(460px, 100%); box-shadow: 0 20px 60px #0008;
+}
+.hero h1 {
+  margin: 0; font-size: 2.6rem; letter-spacing: -0.02em;
+  background: linear-gradient(90deg, #facc15, #22c55e, #0ea5e9); -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.tagline { color: var(--muted); margin-top: 4px; }
+form label { display: block; margin: 14px 0 4px; font-size: 0.9rem; color: var(--muted); }
+input, select {
+  width: 100%; margin-top: 6px; padding: 10px 12px; border-radius: 10px;
+  border: 1px solid var(--border); background: #0f172a; outline: none;
+}
+input:focus, select:focus { border-color: var(--accent-2); }
+
+.btn {
+  border: 1px solid var(--border); background: #1e293b; padding: 8px 14px; border-radius: 10px;
+  cursor: pointer; transition: transform 0.08s, background 0.15s;
+}
+.btn:hover { background: #334155; }
+.btn:active { transform: scale(0.97); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn.primary { background: var(--accent); border-color: transparent; color: #052e16; font-weight: 700; }
+.btn.primary:hover { background: #4ade80; }
+.btn.blue { background: var(--accent-2); border-color: transparent; color: #082f49; font-weight: 700; }
+.btn.danger { background: transparent; border-color: var(--danger); color: #fca5a5; }
+.btn.ghost { background: transparent; }
+.btn.big { width: 100%; margin-top: 20px; padding: 12px; font-size: 1.05rem; }
+.btn.round { width: 58px; height: 58px; border-radius: 50%; font-size: 1.2rem; background: #0f172acc; }
+
+.list { list-style: none; margin: 16px 0; padding: 0; display: grid; gap: 8px; max-height: 55vh; overflow: auto; }
+.list li {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 10px 12px; border-radius: 10px; background: #0f172a; border: 1px solid var(--border);
+}
+.list li .meta { color: var(--muted); font-size: 0.85rem; }
+.list li.owned { border-color: #22c55e66; }
+
+/* --- HUD --- */
+.glass { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); backdrop-filter: blur(8px); }
+#hud { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
+#hud > * { pointer-events: auto; }
+#hud-top-left { position: absolute; top: 12px; left: 12px; padding: 10px 14px; min-width: 190px; }
+#hud-name { font-weight: 700; }
+#hud-money { font-size: 1.3rem; color: #4ade80; font-weight: 800; }
+#minimap { position: absolute; top: 12px; right: 12px; width: 180px; height: 180px; border-radius: 50%; }
+#mission-banner { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); padding: 8px 16px; text-align: center; max-width: 60vw; }
+#prompt { position: absolute; bottom: 32%; left: 50%; transform: translateX(-50%); padding: 10px 18px; font-weight: 600; }
+#prompt kbd { background: #f1f5f9; color: #0f172a; border-radius: 6px; padding: 1px 8px; margin-right: 6px; }
+#toolbar { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); display: flex; gap: 6px; }
+#toolbar .btn { display: flex; flex-direction: column; align-items: center; font-size: 1.2rem; padding: 6px 10px; background: var(--panel); }
+#toolbar .btn span { font-size: 0.7rem; color: var(--muted); }
+#chat { position: absolute; left: 12px; bottom: 12px; width: min(360px, 40vw); padding: 8px; }
+#chat-log { height: 150px; overflow-y: auto; font-size: 0.88rem; display: flex; flex-direction: column; gap: 2px; }
+#chat-log .fam { color: #f9a8d4; }
+#chat-log .sys { color: var(--muted); font-style: italic; }
+#chat-log b { color: #7dd3fc; }
+#chat-form { display: flex; gap: 6px; }
+#chat-form select { width: 96px; flex: none; padding: 10px 6px; }
+
+/* --- Étiquettes au-dessus des joueurs --- */
+.nametag { text-align: center; text-shadow: 0 1px 3px #000, 0 0 8px #000; font-size: 13px; line-height: 1.15; white-space: nowrap; }
+.nametag .fam { color: #f9a8d4; font-size: 11px; }
+.nametag .job { font-size: 14px; }
+
+/* --- Panneaux --- */
+#panel { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; background: #0006; padding: 16px; }
+.panel-card { width: min(620px, 100%); max-height: 88vh; display: flex; flex-direction: column; }
+.panel-card header { display: flex; justify-content: space-between; align-items: center; }
+.panel-card h2 { margin: 0; }
+#panel-body { overflow-y: auto; margin-top: 10px; }
+.tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
+.tabs .btn.active { background: var(--accent-2); color: #082f49; }
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+.row label { flex: 1; min-width: 130px; }
+input[type='color'] { padding: 2px; height: 38px; }
+.region-title { margin: 14px 0 4px; color: var(--muted); font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: #64748b; }
+.dot.on { background: #22c55e; }
+kbd { background: #1e293b; border: 1px solid var(--border); border-radius: 5px; padding: 0 6px; }
+
+/* --- Vol --- */
+#flight-overlay { position: fixed; inset: 0; z-index: 25; display: grid; place-items: end center; padding-bottom: 12vh; pointer-events: none; }
+#flight-overlay.cruise { background: linear-gradient(#0c4a6e, #38bdf8); place-items: center; }
+.flight-card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px 26px; width: min(520px, 92vw); text-align: center; }
+#flight-route { font-size: 1.3rem; font-weight: 700; }
+.flight-track { position: relative; height: 40px; margin: 12px 0; border-bottom: 2px dashed #cbd5e1; }
+#flight-plane { position: absolute; left: 0; bottom: -14px; font-size: 1.8rem; transition: left 0.2s linear; }
+
+/* --- Notifications --- */
+#toasts { position: fixed; top: 70px; left: 50%; transform: translateX(-50%); z-index: 40; display: grid; gap: 6px; justify-items: center; }
+.toast { background: var(--panel); border: 1px solid var(--border); border-left: 4px solid var(--accent-2); padding: 10px 16px; border-radius: 10px; animation: pop 0.25s ease-out; max-width: 90vw; }
+.toast.success { border-left-color: var(--accent); }
+.toast.warn { border-left-color: var(--warn); }
+.toast.error { border-left-color: var(--danger); }
+.toast .btn { margin-left: 10px; padding: 4px 10px; }
+@keyframes pop { from { transform: translateY(-8px); opacity: 0; } }
+#connection { position: fixed; bottom: 50%; left: 50%; transform: translateX(-50%); z-index: 50; background: var(--danger); padding: 10px 18px; border-radius: 10px; font-weight: 700; }
+
+/* --- Tactile --- */
+#touch { position: absolute; inset: 0; pointer-events: none; }
+#joystick { position: absolute; left: 24px; bottom: 120px; width: 130px; height: 130px; border-radius: 50%; background: #0f172a66; border: 2px solid #ffffff33; pointer-events: auto; touch-action: none; }
+#stick { position: absolute; left: 40px; top: 40px; width: 50px; height: 50px; border-radius: 50%; background: #ffffffaa; }
+#touch-buttons { position: absolute; right: 20px; bottom: 120px; display: grid; gap: 10px; pointer-events: auto; }
+
+@media (max-width: 720px) {
+  #minimap { width: 120px; height: 120px; }
+  #chat { width: 60vw; bottom: 84px; }
+  #chat-log { height: 80px; }
+  #toolbar .btn span { display: none; }
+  #hud-top-left { min-width: 0; font-size: 0.85rem; }
+  .touch-on #chat { display: none; }
+}
