@@ -98,7 +98,7 @@ const PLANS = {
       { type: 'tires', x: 5.6, z: -3.6, w: 1, d: 1 },
     ],
     // Places des véhicules (côte à côte, capot vers la porte)
-    slots: [{ x: -4.2, z: 0.8 }, { x: 0, z: 0.8 }, { x: 4.2, z: 0.8 }],
+    slots: [{ x: -4.2, z: -0.7 }, { x: 0, z: -0.7 }, { x: 4.2, z: -0.7 }],
   },
 };
 
