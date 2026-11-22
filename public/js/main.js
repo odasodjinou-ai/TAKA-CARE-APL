@@ -1240,6 +1240,12 @@ if (new URLSearchParams(location.search).has('debug')) {
   if (hour) World.hourOverride = Number(hour);
 }
 
+// Mode démonstration (annoncé par le serveur)
+fetch('/api/status')
+  .then((r) => r.json())
+  .then((st) => $('#demo-banner').classList.toggle('hidden', !st.demo))
+  .catch(() => {});
+
 // --- Démarrage ---------------------------------------------------------------------------
 world.build(COUNTRY_BY_CODE.has(guess) ? guess : 'FR');
 showScreen(loadCreds() ? null : 'login');

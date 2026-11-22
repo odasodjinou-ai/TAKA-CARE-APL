@@ -39,7 +39,7 @@ export function receiptPage(order, merchant) {
 <tr><td>Date de paiement</td><td>${date(order.paidAt)}</td></tr>
 </table>
 <p class="muted">Les Vida sont un contenu numérique livré immédiatement sur ton compte.${merchant.terms ? ` Conditions : <a href="${esc(merchant.terms)}">${esc(merchant.terms)}</a>.` : ''} Garde ce reçu, il te sera demandé en cas de réclamation (${esc(merchant.support)}).</p>
-<div class="noprint">${order.status === 'pending' ? '<button class="cancel" onclick="location.reload()">Actualiser</button>' : ''}<button class="pay" onclick="print()">Imprimer / PDF</button><a class="btn cancel" href="/">Retour au jeu</a></div>`,
+<div class="noprint">${order.status === 'pending' ? '<button class="cancel" onclick="location.reload()">Actualiser</button>' : ''}<button class="pay" onclick="print()">Imprimer / PDF</button><a class="btn cancel" href="/jouer/">Retour au jeu</a></div>`,
   );
 }
 

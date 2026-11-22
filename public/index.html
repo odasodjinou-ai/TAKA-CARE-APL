@@ -1,118 +1,373 @@
 <!doctype html>
 <html lang="fr">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-    <title>Terra Vida</title>
-    <meta name="description" content="Jeu de vie en monde ouvert multijoueur : voyage dans tous les pays, travaille, fonde une famille." />
-    <link rel="stylesheet" href="/css/style.css" />
-    <script type="importmap">
-      {
-        "imports": {
-          "three": "/vendor/three/build/three.module.js",
-          "three/addons/": "/vendor/three/examples/jsm/"
-        }
-      }
-    </script>
-  </head>
-  <body>
-    <div id="game"></div>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Terra Vida — jeu de vie multijoueur</title>
+<meta name="description" content="Jeu de vie multijoueur dans le navigateur : 197 pays, métiers, maisons et appartements, 45 véhicules, familles. Gratuit, sur ordinateur et téléphone.">
+<meta property="og:title" content="Terra Vida">
+<meta property="og:description" content="Vis ta vie dans 197 pays : métier, maison, voiture, famille. Jeu multijoueur gratuit dans le navigateur.">
+<meta property="og:image" content="/site/img/villa.jpg">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8C%8D%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Figtree:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap">
+<style>
+/* Mise en page : une colonne éditoriale, des « écrans » de jeu encadrés comme des captures, sections alternant texte et images. */
+:root {
+  --bg: #0f1613;          /* nuit de savane */
+  --surface: #18221d;
+  --surface-2: #213029;
+  --ink: #f1ebdd;         /* blanc cauri */
+  --muted: #a3aea5;
+  --line: rgba(241, 235, 221, 0.13);
+  --gold: #e9a740;        /* soleil d'harmattan */
+  --vida: #a493f7;        /* violet de la monnaie Vida */
+  --ok: #5fd08a;
+  --todo: #e9a740;
+  --font-display: 'Bricolage Grotesque', 'Segoe UI', system-ui, sans-serif;
+  --font-body: 'Figtree', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #f5f3ec; --surface: #ffffff; --surface-2: #ebe7dc; --ink: #17201b; --muted: #5b665e;
+    --line: rgba(23, 32, 27, 0.14); --gold: #a86708; --vida: #5b45d6; --ok: #1f8a4c; --todo: #a86708;
+    color-scheme: light;
+  }
+}
+:root[data-theme="light"] {
+  --bg: #f5f3ec; --surface: #ffffff; --surface-2: #ebe7dc; --ink: #17201b; --muted: #5b665e;
+  --line: rgba(23, 32, 27, 0.14); --gold: #a86708; --vida: #5b45d6; --ok: #1f8a4c; --todo: #a86708;
+  color-scheme: light;
+}
 
-    <!-- Écran de connexion / création de personnage -->
-    <section id="screen-login" class="screen">
-      <div class="card hero">
-        <h1>Terra Vida</h1>
-        <p class="tagline">Voyage dans tous les pays du monde, trouve un métier, fonde ta famille.</p>
-        <div class="tabs" id="login-tabs">
-          <button class="btn active" type="button" data-tab="phone">📱 Avec mon numéro</button>
-          <button class="btn" type="button" data-tab="guest">👤 Jouer en invité</button>
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--ink); font: 400 1rem/1.6 var(--font-body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.wrap { max-width: 1120px; margin: 0 auto; }
+h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; margin: 0; letter-spacing: -0.02em; }
+p { margin: 0; }
+a { color: var(--gold); }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--gold); outline-offset: 3px; border-radius: 4px; }
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.eyebrow { font: 600 0.78rem/1 var(--font-body); letter-spacing: 0.14em; text-transform: uppercase; color: var(--gold); }
+
+/* --- En-tête --- */
+.top { display: flex; justify-content: space-between; align-items: center; padding-block: 22px; gap: 16px; flex-wrap: wrap; }
+.brand { font: 800 1.15rem/1 var(--font-display); letter-spacing: -0.01em; }
+.brand span { color: var(--vida); }
+.top nav { display: flex; gap: 18px; flex-wrap: wrap; font-size: 0.92rem; }
+.top nav a { color: var(--muted); text-decoration: none; }
+.top nav a:hover { color: var(--ink); }
+
+/* --- Ouverture --- */
+.hero { display: grid; gap: 28px; padding-block: 28px 56px; }
+.hero h1 { font-size: clamp(3rem, 9vw, 6.6rem); line-height: 0.92; font-weight: 800; }
+.hero h1 em { font-style: normal; color: var(--gold); }
+.hero .lede { font-size: clamp(1.08rem, 2.2vw, 1.3rem); max-width: 62ch; color: var(--muted); }
+.hero .lede b { color: var(--ink); font-weight: 600; }
+.cta { display: flex; gap: 12px; flex-wrap: wrap; }
+.btn { display: inline-flex; align-items: center; gap: 8px; padding: 12px 18px; border-radius: 999px; font-weight: 600; text-decoration: none; border: 1px solid var(--line); color: var(--ink); background: var(--surface); }
+.btn.primary { background: var(--gold); border-color: transparent; color: #1c1205; }
+.screen { border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: #000; box-shadow: 0 30px 80px -40px rgba(0, 0, 0, 0.7); }
+.screen img { display: block; width: 100%; height: auto; }
+.screen figcaption, figure figcaption { font-size: 0.86rem; color: var(--muted); padding: 10px 2px 0; }
+figure { margin: 0; min-width: 0; }
+a.zoom { display: block; }
+
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.stats div { background: var(--surface); padding: 16px 18px; }
+.stats b { display: block; font: 700 1.9rem/1.1 var(--font-display); }
+.stats span { color: var(--muted); font-size: 0.88rem; }
+
+/* --- Sections --- */
+section { padding-block: 56px; border-top: 1px solid var(--line); }
+.head { display: grid; gap: 10px; margin-bottom: 28px; max-width: 70ch; }
+.head h2 { font-size: clamp(1.9rem, 4.4vw, 2.9rem); line-height: 1.02; }
+.head p { color: var(--muted); }
+.grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px; }
+.grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 22px; }
+.feature-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 18px 28px; margin-top: 30px; }
+.feature-list div { border-top: 2px solid var(--gold); padding-top: 12px; min-width: 0; }
+.feature-list h3 { font-size: 1.12rem; margin-bottom: 4px; }
+.feature-list p { color: var(--muted); font-size: 0.95rem; }
+.phones { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; align-items: start; }
+.phones img { border-radius: 26px; border: 1px solid var(--line); width: 100%; display: block; }
+.strip { display: grid; gap: 14px; }
+.strip img { border-radius: 10px; border: 1px solid var(--line); width: 100%; display: block; }
+.split { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 32px; align-items: start; }
+.mobile-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; max-width: 420px; }
+.mobile-pair img { border-radius: 22px; border: 1px solid var(--line); width: 100%; display: block; }
+
+/* --- Économie --- */
+.money { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px; }
+.coin { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 22px; min-width: 0; }
+.coin h3 { font-size: 1.5rem; display: flex; align-items: baseline; gap: 10px; }
+.coin h3 .sym { font-family: var(--font-mono); font-size: 1.2rem; }
+.coin.vida h3 { color: var(--vida); }
+.coin p { color: var(--muted); margin-top: 8px; }
+.table-wrap { overflow-x: auto; margin-top: 14px; }
+table { border-collapse: collapse; width: 100%; font-size: 0.93rem; }
+th, td { text-align: left; padding: 8px 10px 8px 0; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { color: var(--muted); font-weight: 500; font-size: 0.8rem; letter-spacing: 0.06em; text-transform: uppercase; }
+td.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; padding-right: 0; }
+th.num { text-align: right; padding-right: 0; }
+.methods { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.methods span { font-size: 0.85rem; padding: 5px 11px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface-2); }
+
+/* --- État --- */
+.status { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px; }
+.status ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.status li { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 8px; font-size: 0.96rem; }
+.status li::before { content: "✓"; color: var(--ok); font-weight: 700; }
+.status .todo li::before { content: "○"; color: var(--todo); }
+.status h3 { font-size: 1.1rem; margin-bottom: 12px; }
+pre { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px; overflow-x: auto; font: 500 0.9rem/1.7 var(--font-mono); margin: 14px 0 0; }
+.note { border-left: 3px solid var(--vida); padding: 6px 0 6px 14px; color: var(--muted); margin-top: 18px; max-width: 72ch; }
+footer { padding-block: 40px 60px; border-top: 1px solid var(--line); color: var(--muted); font-size: 0.88rem; display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+
+@media (max-width: 820px) {
+  .grid2, .grid3, .split, .money, .status { grid-template-columns: minmax(0, 1fr); }
+  .phones { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .hero .screen { animation: rise 0.9s ease-out both; }
+  @keyframes rise { from { transform: translateY(14px); opacity: 0.6; } }
+}
+html { scroll-behavior: smooth; }
+body { margin: 0; }
+img { max-width: 100%; }
+.live { display: inline-flex; align-items: center; gap: 8px; font-size: 0.92rem; color: var(--muted); }
+.live i { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); display: inline-block; }
+.live.on i { background: var(--ok); box-shadow: 0 0 0 4px color-mix(in srgb, var(--ok) 25%, transparent); }
+.rooms { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin-top: 16px; }
+.room { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+.room b { display: block; font-family: var(--font-display); }
+.bar { height: 6px; border-radius: 3px; background: var(--surface-2); margin-top: 8px; overflow: hidden; }
+.bar span { display: block; height: 100%; background: var(--gold); }
+.demo { background: color-mix(in srgb, var(--vida) 18%, var(--surface)); border: 1px solid color-mix(in srgb, var(--vida) 45%, transparent); border-radius: 10px; padding: 10px 14px; font-size: 0.92rem; margin-top: 14px; }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header class="top">
+    <div class="brand">Terra <span>Vida</span></div>
+    <nav aria-label="Sections">
+      <a href="#monde">Le monde</a>
+      <a href="#maison">Maisons</a>
+      <a href="#vehicules">Véhicules</a>
+      <a href="#economie">Économie</a>
+      <a href="#serveurs">Serveurs</a>
+      <a class="btn primary" style="padding:7px 14px" href="/jouer/">Jouer</a>
+    </nav>
+  </header>
+
+  <div class="hero">
+    <p class="eyebrow">Jeu de vie multijoueur · navigateur et mobile</p>
+    <h1>Vis ta vie<br>dans <em>197 pays</em>.</h1>
+    <p class="lede">Trouve un métier, gagne tes <b>Cauris 🐚</b>, loue un appartement puis achète une villa avec ta famille, conduis 45 véhicules et prends l'avion vers n'importe quel pays. Avec des joueurs réels, sur 5 serveurs.</p>
+    <div class="cta">
+      <a class="btn primary" href="/jouer/">▶ Jouer maintenant, gratuit</a>
+      <a class="btn" href="#serveurs">Voir les serveurs</a>
+      <span class="live" id="live"><i></i><span>Connexion au serveur…</span></span>
+    </div>
+    <figure class="screen">
+      <a class="zoom" href="/site/img/villa.jpg"><img src="/site/img/villa.jpg" width="1280" height="800" alt="Une villa de luxe au Bénin en plein jour : garage ouvert avec un SUV, une sportive rouge dans l'allée, piscine et plaque « Famille Iroko »."></a>
+    </figure>
+    <div class="stats">
+      <div><b class="mono">197</b><span>pays avec ville et aéroport</span></div>
+      <div><b class="mono">45</b><span>véhicules, motos et bus</span></div>
+      <div><b class="mono">14</b><span>maisons et 12 appartements par pays</span></div>
+      <div><b class="mono">64</b><span>tests automatiques qui passent</span></div>
+    </div>
+  </div>
+
+  <section id="monde">
+    <div class="head">
+      <p class="eyebrow">Le monde</p>
+      <h2>Une ville vivante dans chaque pays</h2>
+      <p>Chaque pays a sa ville, son climat (désert, savane, tropical, neige…), son aéroport et son quartier résidentiel. La circulation s'arrête aux feux rouges, les lampadaires éclairent la nuit, et la nationale traverse le fleuve jusqu'au péage.</p>
+    </div>
+    <div class="grid2">
+      <figure><a class="zoom" href="/site/img/peage.jpg"><img src="/site/img/peage.jpg" width="1280" height="760" alt="Poste de péage à 50 Cauris avec cabines, barrières et véhicules qui paient." style="border-radius:12px;border:1px solid var(--line)"></a><figcaption>Le péage de la nationale : <span class="mono">50 🐚</span> par passage, gratuit pour les membres Premium. Un joueur peut y travailler comme péagiste.</figcaption></figure>
+      <figure><a class="zoom" href="/site/img/pont.jpg"><img src="/site/img/pont.jpg" width="1280" height="760" alt="Le pont de la nationale au-dessus du fleuve, avec lampadaires et voitures." style="border-radius:12px;border:1px solid var(--line)"></a><figcaption>Le pont au-dessus du fleuve, seul passage vers le nord.</figcaption></figure>
+      <figure><a class="zoom" href="/site/img/departs.jpg"><img src="/site/img/departs.jpg" width="1280" height="720" alt="Écran des départs de l'aéroport avec recherche d'un pays et prix du billet." style="border-radius:12px;border:1px solid var(--line)"></a><figcaption>L'aéroport : billet à <span class="mono">400 🐚</span> dans sa région, <span class="mono">1 100 🐚</span> à l'international, avec décollage animé.</figcaption></figure>
+      <figure><a class="zoom" href="/site/img/quartier.jpg"><img src="/site/img/quartier.jpg" width="1280" height="760" alt="Le quartier résidentiel avec villas, piscine et panneaux À vendre." style="border-radius:12px;border:1px solid var(--line)"></a><figcaption>Le quartier résidentiel : maisons à vendre et maisons de familles aux couleurs choisies.</figcaption></figure>
+    </div>
+    <div class="feature-list">
+      <div><h3>4 métiers</h3><p>Livreur, chauffeur de taxi, ambulancier, policier, plus péagiste. Les missions sont validées par le serveur.</p></div>
+      <div><h3>Familles</h3><p>Invitations, chat familial, virements, et une cagnotte commune pour acheter les maisons.</p></div>
+      <div><h3>Personnage</h3><p>Teint, coiffures (afro, tresses…), boubou, costume, chapeau de cowboy, couronne.</p></div>
+      <div><h3>Chat modéré</h3><p>Insultes masquées automatiquement, silence progressif, signalements et écran de modération.</p></div>
+    </div>
+  </section>
+
+  <section id="maison">
+    <div class="head">
+      <p class="eyebrow">Maisons et appartements</p>
+      <h2>De ton premier studio à la villa avec piscine</h2>
+      <p>Commence par louer un appartement à la résidence, puis achète une maison avec ta famille. Les maisons rapportent un revenu chaque jour de jeu. Garages, caméras et appareils se pilotent depuis le téléphone du jeu ou avec les interrupteurs de la maison.</p>
+    </div>
+    <div class="split">
+      <div style="display:grid;gap:22px;min-width:0">
+        <figure><a class="zoom" href="/site/img/studio.jpg"><img src="/site/img/studio.jpg" width="1280" height="760" alt="Intérieur d'un studio meublé : lit, télévision, canapé, tapis et plante." style="border-radius:12px;border:1px solid var(--line)"></a><figcaption>Un studio de la résidence, loué <span class="mono">1 500 🐚</span> pour 7 jours, avec les mêmes avantages qu'une maison.</figcaption></figure>
+        <figure><a class="zoom" href="/site/img/villa-interieur.jpg"><img src="/site/img/villa-interieur.jpg" width="1280" height="760" alt="Salon d'une villa éclairé : deux canapés bleus, tapis rouge, table basse et plante." style="border-radius:12px;border:1px solid var(--line)"></a><figcaption>Le salon d'une villa, lumières allumées depuis l'interrupteur de l'entrée.</figcaption></figure>
+      </div>
+      <div>
+        <div class="phones">
+          <a class="zoom" href="/site/img/cameras.jpg"><img src="/site/img/cameras.jpg" width="340" height="525" alt="Téléphone du jeu : flux de la caméra Entrée et journal de surveillance."></a>
+          <a class="zoom" href="/site/img/appareils.jpg"><img src="/site/img/appareils.jpg" width="340" height="525" alt="Téléphone du jeu : interrupteurs des lumières, porte du garage, alarme, musique et piscine."></a>
+          <a class="zoom" href="/site/img/garage-tel.jpg"><img src="/site/img/garage-tel.jpg" width="340" height="525" alt="Téléphone du jeu : garage avec deux véhicules garés et une place libre."></a>
         </div>
-        <div id="phone-box"></div>
-        <form id="login-form" autocomplete="off" class="hidden">
-          <p class="muted">Compte invité : lié à ce navigateur uniquement. Tu pourras lier ton numéro plus tard.</p>
-          <label>Pseudo
-            <input id="login-name" maxlength="16" required placeholder="Ton pseudo" />
-          </label>
-          <label>Pays d'origine (ton aéroport de départ)
-            <select id="login-home"></select>
-          </label>
-          <button class="btn primary big" type="submit">Créer mon personnage</button>
-        </form>
-        <p id="login-status" class="muted"></p>
-      </div>
-    </section>
-
-    <!-- Liste des serveurs -->
-    <section id="screen-servers" class="screen hidden">
-      <div class="card">
-        <h2>Choisis un serveur</h2>
-        <p class="muted" id="servers-hello"></p>
-        <ul id="server-list" class="list"></ul>
-        <button class="btn ghost" id="btn-logout">Changer de personnage</button>
-      </div>
-    </section>
-
-    <!-- HUD en jeu -->
-    <div id="hud" class="hidden">
-      <div id="hud-top-left" class="glass" title="Mon compte" style="cursor:pointer">
-        <div id="hud-name"></div>
-        <div id="hud-money"></div>
-        <div id="hud-vida"></div>
-        <div id="hud-country"></div>
-        <div id="hud-clock" class="muted"></div>
-      </div>
-      <canvas id="minimap" width="200" height="200" class="glass"></canvas>
-      <div id="mission-banner" class="glass hidden"></div>
-      <div id="prompt" class="glass hidden"></div>
-      <div id="speedo" class="glass hidden"></div>
-      <div id="toolbar">
-        <button class="btn vida" data-panel="vida" title="Vida & Premium (P)">💎<span>Vida</span></button>
-        <button class="btn" data-panel="wardrobe" title="Garde-robe (C)">👕<span>Garde-robe</span></button>
-        <button class="btn" data-panel="family" title="Famille (G)">👨‍👩‍👧<span>Famille</span></button>
-        <button class="btn" data-panel="phone" title="Téléphone (T)">📱<span>Téléphone</span></button>
-        <button class="btn" data-action="car" title="Voiture (V)">🚗<span>Voiture</span></button>
-        <button class="btn" data-panel="help" title="Aide (H)">❔<span>Aide</span></button>
-        <button class="btn" data-action="servers" title="Serveurs">🌐<span>Serveurs</span></button>
-        <button class="btn hidden" id="btn-admin" data-panel="admin" title="Modération">🛡️<span>Modération</span></button>
-      </div>
-      <div id="chat" class="glass">
-        <div id="chat-log"></div>
-        <form id="chat-form" autocomplete="off">
-          <select id="chat-channel"><option value="all">Tous</option><option value="family">Famille</option></select>
-          <input id="chat-input" maxlength="200" placeholder="Entrée pour discuter…" />
-        </form>
-      </div>
-      <!-- Contrôles tactiles -->
-      <div id="touch" class="hidden">
-        <div id="joystick"><div id="stick"></div></div>
-        <div id="touch-buttons">
-          <button class="btn round" data-key="KeyE">E</button>
-          <button class="btn round" data-key="Space">⤒</button>
-          <button class="btn round" data-key="ShiftLeft">🏃</button>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Logement</th><th class="num">Prix</th><th class="num">Garage</th><th class="num">Caméras</th><th class="num">Revenu / jour</th></tr></thead>
+            <tbody>
+              <tr><td>Studio (location 7 j)</td><td class="num">1 500 🐚</td><td class="num">1</td><td class="num">1</td><td class="num">—</td></tr>
+              <tr><td>Maison</td><td class="num">15 000 🐚</td><td class="num">1</td><td class="num">2</td><td class="num">150 🐚</td></tr>
+              <tr><td>Villa</td><td class="num">40 000 🐚</td><td class="num">2</td><td class="num">4</td><td class="num">400 🐚</td></tr>
+              <tr><td>Villa de luxe</td><td class="num">120 000 🐚</td><td class="num">3</td><td class="num">6</td><td class="num">1 000 🐚</td></tr>
+            </tbody>
+          </table>
         </div>
       </div>
     </div>
+  </section>
 
-    <!-- Panneau modal générique -->
-    <div id="panel" class="hidden">
-      <div class="card panel-card">
-        <header><h2 id="panel-title"></h2><button class="btn ghost" id="panel-close" aria-label="Fermer">✕</button></header>
-        <div id="panel-body"></div>
+  <section id="vehicules">
+    <div class="head">
+      <p class="eyebrow">Véhicules</p>
+      <h2>45 modèles, du zémidjan à la supercar</h2>
+      <p>Onze marques imaginaires inspirées des constructeurs du monde entier, dont Savane Auto (Bénin) : citadines, taxis, SUV, pick-up, sportives, gbaka, bus et motos. Boîte automatique, frein à main pour déraper, son du moteur et phares la nuit.</p>
+    </div>
+    <div class="strip">
+      <a class="zoom" href="/site/img/citadines.jpg"><img src="/site/img/citadines.jpg" width="1180" height="200" alt="Citadine rouge, taxi jaune, berline blanche et break noir."></a>
+      <a class="zoom" href="/site/img/sportives.jpg"><img src="/site/img/sportives.jpg" width="1070" height="140" alt="Coupé rouge, deux supercars à aileron et deux motos."></a>
+      <div class="grid2">
+        <a class="zoom" href="/site/img/supercar.jpg"><img src="/site/img/supercar.jpg" width="1400" height="760" alt="Gros plan d'une supercar rouge à aileron."></a>
+        <a class="zoom" href="/site/img/bus.jpg"><img src="/site/img/bus.jpg" width="1400" height="760" alt="Bus urbain vert avec girouette Ligne 1 et camion de livraison."></a>
       </div>
     </div>
+  </section>
 
-    <!-- Cinématique de vol -->
-    <div id="flight-overlay" class="hidden">
-      <div class="flight-card">
-        <div id="flight-route"></div>
-        <div class="flight-track"><div id="flight-plane">✈</div></div>
-        <div class="muted" id="flight-status">Embarquement…</div>
+  <section id="economie">
+    <div class="head">
+      <p class="eyebrow">Économie</p>
+      <h2>Deux monnaies, des paiements locaux</h2>
+      <p>L'argent du jeu se gagne en jouant. La monnaie de l'application s'achète en argent réel, avec un reçu numéroté pour chaque paiement.</p>
+    </div>
+    <div class="money">
+      <div class="coin">
+        <h3><span class="sym">🐚</span> Cauris</h3>
+        <p>Gagnés avec les métiers et les revenus des maisons. Servent aux vêtements, voitures, billets d'avion, loyers et maisons. 2 500 🐚 au départ.</p>
+      </div>
+      <div class="coin vida">
+        <h3><span class="sym">Ʋ</span> Vida</h3>
+        <p>Achetés en FCFA. Servent au titre Premium, aux véhicules de luxe et au change en Cauris.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Pack</th><th class="num">Prix</th><th class="num">Bonus</th></tr></thead>
+            <tbody>
+              <tr><td>100 Ʋ</td><td class="num">1 000 FCFA</td><td class="num">—</td></tr>
+              <tr><td>260 Ʋ</td><td class="num">2 500 FCFA</td><td class="num">+4 %</td></tr>
+              <tr><td>550 Ʋ</td><td class="num">5 000 FCFA</td><td class="num">+10 %</td></tr>
+              <tr><td>1 150 Ʋ</td><td class="num">10 000 FCFA</td><td class="num">+15 %</td></tr>
+              <tr><td>2 400 Ʋ</td><td class="num">20 000 FCFA</td><td class="num">+20 %</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="methods" aria-label="Moyens de paiement">
+          <span>MTN MoMo</span><span>Moov Money</span><span>Celtiis Cash</span><span>Wave</span><span>Orange Money</span><span>PayPal / carte</span>
+        </div>
       </div>
     </div>
+    <div class="grid3" style="margin-top:22px">
+      <figure><a class="zoom" href="/site/img/vida.jpg"><img src="/site/img/vida.jpg" width="1280" height="720" alt="Écran d'achat de Vida avec packs et moyens de paiement." style="border-radius:12px;border:1px solid var(--line)"></a><figcaption>Choix du pack et du moyen de paiement.</figcaption></figure>
+      <figure><a class="zoom" href="/site/img/recu.jpg"><img src="/site/img/recu.jpg" width="1280" height="720" alt="Reçu de paiement numéroté TV-2026-000001 payé par Celtiis Cash." style="border-radius:12px;border:1px solid var(--line)"></a><figcaption>Le reçu, imprimable en PDF.</figcaption></figure>
+      <div class="coin">
+        <h3 style="color:var(--gold)">⭐ Premium</h3>
+        <p>3 mois : <span class="mono">1 000 FCFA</span> la première fois, puis <span class="mono">1 600 FCFA</span>. Badge doré, +50 % de salaire, −30 % sur les vols, péage gratuit, véhicules exclusifs.</p>
+      </div>
+    </div>
+  </section>
 
-    <div id="toasts"></div>
-    <div id="connection" class="hidden">Connexion perdue — reconnexion…</div>
+  <section id="compte">
+    <div class="head">
+      <p class="eyebrow">Compte et sécurité</p>
+      <h2>Ton numéro, ton compte, sur tous tes appareils</h2>
+      <p>Connexion par code SMS : on retrouve son personnage, ses Vida et sa maison sur n'importe quel téléphone. Le mode invité reste possible. Le chat est filtré, et les modérateurs traitent les signalements depuis le jeu.</p>
+    </div>
+    <div class="split">
+      <div class="mobile-pair">
+        <a class="zoom" href="/site/img/sms.jpg"><img src="/site/img/sms.jpg" width="1082" height="2202" alt="Écran de connexion sur téléphone : saisie du code reçu par SMS."></a>
+        <a class="zoom" href="/site/img/mobile.jpg"><img src="/site/img/mobile.jpg" width="1082" height="2202" alt="Le jeu sur téléphone avec joystick et boutons tactiles."></a>
+      </div>
+      <figure><a class="zoom" href="/site/img/moderation.jpg"><img src="/site/img/moderation.jpg" width="1280" height="800" alt="Écran de modération : signalement d'un message insultant masqué dans le chat." style="border-radius:12px;border:1px solid var(--line)"></a><figcaption>L'écran de modération : l'insulte est masquée pour tous, le modérateur ouvre le dossier et peut avertir, réduire au silence ou bannir.</figcaption></figure>
+    </div>
+  </section>
 
-    <script type="module" src="/js/main.js"></script>
-  </body>
+  <section id="serveurs">
+    <div class="head">
+      <p class="eyebrow">Serveurs</p>
+      <h2>Rejoins les joueurs en ligne</h2>
+      <p>Choisis ton serveur dans le jeu. Tes amis te voient s'ils sont sur le même serveur et dans le même pays. Aucun téléchargement : le jeu s'ouvre dans le navigateur, sur ordinateur comme sur téléphone.</p>
+    </div>
+    <div class="rooms" id="rooms"><div class="room"><b>Chargement…</b><span class="meta">État des serveurs</span></div></div>
+    <div class="demo" id="demo" hidden>🧪 <b>Serveur de démonstration</b> : les paiements sont simulés (aucun argent réel n'est débité) et le code de connexion s'affiche à l'écran au lieu d'être envoyé par SMS.</div>
+    <div class="cta" style="margin-top:22px"><a class="btn primary" href="/jouer/">▶ Jouer maintenant</a></div>
+    <div class="feature-list">
+      <div><h3>Ordinateur</h3><p>ZQSD ou flèches pour bouger, souris pour la caméra, E pour interagir, V pour ta voiture, T pour ton téléphone.</p></div>
+      <div><h3>Téléphone</h3><p>Joystick à gauche, boutons à droite. Ajoute la page à ton écran d'accueil pour la retrouver comme une appli.</p></div>
+      <div><h3>Ton compte</h3><p>Connecte-toi avec ton numéro pour retrouver ton personnage sur tous tes appareils, ou joue en invité.</p></div>
+    </div>
+  </section>
+
+  <footer>
+    <span>Terra Vida · 2026</span>
+    <span><a href="/jouer/">Jouer</a> · <a href="https://github.com/odasodjinou-ai/TAKA-CARE-APL">Code source</a></span>
+  </footer>
+</div>
+<script>
+// État des serveurs en direct (rafraîchi toutes les 15 s)
+const fmt = (n) => n.toLocaleString('fr-FR');
+async function refresh() {
+  const live = document.getElementById('live');
+  try {
+    const r = await fetch('/api/status', { cache: 'no-store' });
+    const s = await r.json();
+    live.classList.add('on');
+    live.lastElementChild.textContent = s.online === 0 ? 'Serveur en ligne · sois le premier à jouer' : `${fmt(s.online)} joueur${s.online > 1 ? 's' : ''} en ligne`;
+    const box = document.getElementById('rooms');
+    box.replaceChildren(...s.rooms.map((room) => {
+      const el = document.createElement('div');
+      el.className = 'room';
+      const b = document.createElement('b');
+      b.textContent = room.name;
+      const m = document.createElement('span');
+      m.className = 'meta';
+      m.style.color = 'var(--muted)';
+      m.textContent = `${room.count} / ${room.max} joueurs`;
+      const bar = document.createElement('div');
+      bar.className = 'bar';
+      const fill = document.createElement('span');
+      fill.style.width = `${Math.round((room.count / room.max) * 100)}%`;
+      bar.append(fill);
+      el.append(b, m, bar);
+      return el;
+    }));
+    document.getElementById('demo').hidden = !s.demo;
+  } catch {
+    live.classList.remove('on');
+    live.lastElementChild.textContent = 'Serveur injoignable pour le moment';
+  }
+}
+refresh();
+setInterval(refresh, 15000);
+</script>
+</body>
 </html>

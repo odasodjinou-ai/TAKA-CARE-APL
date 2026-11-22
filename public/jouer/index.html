@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <title>Terra Vida</title>
+    <meta name="description" content="Jeu de vie en monde ouvert multijoueur : voyage dans tous les pays, travaille, fonde une famille." />
+    <link rel="stylesheet" href="/css/style.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "/vendor/three/build/three.module.js",
+          "three/addons/": "/vendor/three/examples/jsm/"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <div id="game"></div>
+
+    <!-- Écran de connexion / création de personnage -->
+    <section id="screen-login" class="screen">
+      <div class="card hero">
+        <h1>Terra Vida</h1>
+        <p class="tagline">Voyage dans tous les pays du monde, trouve un métier, fonde ta famille.</p>
+        <p id="demo-banner" class="muted hidden" style="border-left:3px solid #a493f7;padding-left:10px">🧪 Serveur de démonstration : paiements simulés, code de connexion affiché à l'écran.</p>
+        <div class="tabs" id="login-tabs">
+          <button class="btn active" type="button" data-tab="phone">📱 Avec mon numéro</button>
+          <button class="btn" type="button" data-tab="guest">👤 Jouer en invité</button>
+        </div>
+        <div id="phone-box"></div>
+        <form id="login-form" autocomplete="off" class="hidden">
+          <p class="muted">Compte invité : lié à ce navigateur uniquement. Tu pourras lier ton numéro plus tard.</p>
+          <label>Pseudo
+            <input id="login-name" maxlength="16" required placeholder="Ton pseudo" />
+          </label>
+          <label>Pays d'origine (ton aéroport de départ)
+            <select id="login-home"></select>
+          </label>
+          <button class="btn primary big" type="submit">Créer mon personnage</button>
+        </form>
+        <p id="login-status" class="muted"></p>
+        <p class="muted"><a href="/" style="color:#7dd3fc">← Découvrir le jeu</a></p>
+      </div>
+    </section>
+
+    <!-- Liste des serveurs -->
+    <section id="screen-servers" class="screen hidden">
+      <div class="card">
+        <h2>Choisis un serveur</h2>
+        <p class="muted" id="servers-hello"></p>
+        <ul id="server-list" class="list"></ul>
+        <button class="btn ghost" id="btn-logout">Changer de personnage</button>
+      </div>
+    </section>
+
+    <!-- HUD en jeu -->
+    <div id="hud" class="hidden">
+      <div id="hud-top-left" class="glass" title="Mon compte" style="cursor:pointer">
+        <div id="hud-name"></div>
+        <div id="hud-money"></div>
+        <div id="hud-vida"></div>
+        <div id="hud-country"></div>
+        <div id="hud-clock" class="muted"></div>
+      </div>
+      <canvas id="minimap" width="200" height="200" class="glass"></canvas>
+      <div id="mission-banner" class="glass hidden"></div>
+      <div id="prompt" class="glass hidden"></div>
+      <div id="speedo" class="glass hidden"></div>
+      <div id="toolbar">
+        <button class="btn vida" data-panel="vida" title="Vida & Premium (P)">💎<span>Vida</span></button>
+        <button class="btn" data-panel="wardrobe" title="Garde-robe (C)">👕<span>Garde-robe</span></button>
+        <button class="btn" data-panel="family" title="Famille (G)">👨‍👩‍👧<span>Famille</span></button>
+        <button class="btn" data-panel="phone" title="Téléphone (T)">📱<span>Téléphone</span></button>
+        <button class="btn" data-action="car" title="Voiture (V)">🚗<span>Voiture</span></button>
+        <button class="btn" data-panel="help" title="Aide (H)">❔<span>Aide</span></button>
+        <button class="btn" data-action="servers" title="Serveurs">🌐<span>Serveurs</span></button>
+        <button class="btn hidden" id="btn-admin" data-panel="admin" title="Modération">🛡️<span>Modération</span></button>
+      </div>
+      <div id="chat" class="glass">
+        <div id="chat-log"></div>
+        <form id="chat-form" autocomplete="off">
+          <select id="chat-channel"><option value="all">Tous</option><option value="family">Famille</option></select>
+          <input id="chat-input" maxlength="200" placeholder="Entrée pour discuter…" />
+        </form>
+      </div>
+      <!-- Contrôles tactiles -->
+      <div id="touch" class="hidden">
+        <div id="joystick"><div id="stick"></div></div>
+        <div id="touch-buttons">
+          <button class="btn round" data-key="KeyE">E</button>
+          <button class="btn round" data-key="Space">⤒</button>
+          <button class="btn round" data-key="ShiftLeft">🏃</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Panneau modal générique -->
+    <div id="panel" class="hidden">
+      <div class="card panel-card">
+        <header><h2 id="panel-title"></h2><button class="btn ghost" id="panel-close" aria-label="Fermer">✕</button></header>
+        <div id="panel-body"></div>
+      </div>
+    </div>
+
+    <!-- Cinématique de vol -->
+    <div id="flight-overlay" class="hidden">
+      <div class="flight-card">
+        <div id="flight-route"></div>
+        <div class="flight-track"><div id="flight-plane">✈</div></div>
+        <div class="muted" id="flight-status">Embarquement…</div>
+      </div>
+    </div>
+
+    <div id="toasts"></div>
+    <div id="connection" class="hidden">Connexion perdue — reconnexion…</div>
+
+    <script type="module" src="/js/main.js"></script>
+  </body>
+</html>

@@ -1,0 +1,29 @@
+# Déploiement sur Render (https://render.com) : bouton « Deploy to Render » ou New > Blueprint.
+# Un seul service web sert le site (/), le jeu (/jouer/) et le multijoueur (WebSocket /ws).
+services:
+  - type: web
+    name: terra-vida
+    runtime: node
+    plan: free # gratuit : se met en veille sans visite et perd les données à chaque redémarrage
+    buildCommand: npm ci --omit=dev
+    startCommand: node server/index.js
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: TRUST_PROXY
+        value: "1"
+      # Mode démonstration : paiements simulés, code de connexion affiché à l'écran.
+      # Pour la production : supprimer ces deux lignes, ajouter NODE_ENV=production et les clés.
+      - key: PAYMENTS_SANDBOX
+        value: "1"
+      - key: SMS_DEV
+        value: "1"
+      - key: ADMIN_PHONES
+        sync: false # à saisir dans le tableau de bord Render (numéros des modérateurs)
+    # Pour garder les comptes et maisons entre deux redémarrages (offre payante) :
+    # disk:
+    #   name: data
+    #   mountPath: /var/data
+    #   sizeGB: 1
+    # et ajouter la variable DATA_FILE=/var/data/db.json

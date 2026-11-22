@@ -15,7 +15,10 @@ import { OtpService } from './auth/otp.js';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.PORT) || 3000;
 const DATA_FILE = process.env.DATA_FILE || path.join(ROOT, 'data', 'db.json');
-const PUBLIC_URL = process.env.PUBLIC_URL || `http://localhost:${PORT}`;
+// Render fournit RENDER_EXTERNAL_URL automatiquement ; sinon PUBLIC_URL, sinon localhost
+const PUBLIC_URL = process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
+// Mode démo : paiements simulés et codes SMS affichés. Refusé si NODE_ENV=production.
+const DEMO = process.env.NODE_ENV !== 'production' && (process.env.PAYMENTS_SANDBOX === '1' || process.env.SMS_DEV === '1');
 const MERCHANT = {
   name: process.env.MERCHANT_NAME || 'Terra Vida',
   address: process.env.MERCHANT_ADDRESS || '',
@@ -38,6 +41,9 @@ const MIME = {
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
   '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.txt': 'text/plain; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.ico': 'image/x-icon',
 };
@@ -147,6 +153,18 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: true, players: game.clients.size }));
     return;
   }
+  if (url.pathname === '/api/status') {
+    // État public du serveur (affiché en direct sur le site)
+    const rooms = game.roomList();
+    res
+      .writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'access-control-allow-origin': '*' })
+      .end(JSON.stringify({ ok: true, online: rooms.reduce((a, r) => a + r.count, 0), rooms, demo: DEMO, sms: !!sms, payments: active.filter((x) => x !== 'Simulation (test)') }));
+    return;
+  }
+  if (url.pathname === '/jouer') {
+    res.writeHead(301, { location: '/jouer/' }).end();
+    return;
+  }
   let file;
   try {
     file = resolveStatic(url.pathname);
@@ -158,6 +176,14 @@ const server = http.createServer((req, res) => {
     return;
   }
   fs.stat(file, (err, st) => {
+    if (!err && st.isDirectory()) {
+      file = path.join(file, 'index.html'); // /jouer/ -> /jouer/index.html
+      try {
+        st = fs.statSync(file);
+      } catch {
+        err = true;
+      }
+    }
     if (err || !st.isFile()) {
       res.writeHead(404).end('Not found');
       return;
@@ -165,7 +191,7 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, {
       'content-type': MIME[path.extname(file)] ?? 'application/octet-stream',
       'content-length': st.size,
-      'cache-control': file.includes('node_modules') ? 'public, max-age=86400' : 'no-cache',
+      'cache-control': file.includes('node_modules') || path.extname(file) === '.jpg' ? 'public, max-age=86400' : 'no-cache',
       'x-content-type-options': 'nosniff',
     });
     if (req.method === 'HEAD') res.end();

@@ -40,6 +40,27 @@ Commandes : ZQSD/WASD/flèches, souris pour la caméra, Maj courir, Espace saute
 **E** interagir, **V** véhicule, **B** klaxon, **M** son, **P** Vida/Premium, **C** garde-robe, **G** famille,
 **T** téléphone, **H** aide, Entrée chat. Sur mobile : joystick + boutons.
 
+## Mettre le jeu en ligne
+
+Un seul serveur Node sert tout : le **site** (`/`), le **jeu** (`/jouer/`), le **multijoueur**
+(WebSocket `/ws`), les paiements et les reçus. `/api/status` donne le nombre de joueurs en ligne.
+
+### Render (le plus simple)
+1. Fusionner la pull request dans `main` (Render lit `render.yaml` sur la branche par défaut).
+2. Sur [render.com](https://render.com) : *New* → *Blueprint* → choisir ce dépôt GitHub → *Apply*.
+   Ou ouvrir directement : `https://render.com/deploy?repo=https://github.com/odasodjinou-ai/TAKA-CARE-APL`
+3. Après quelques minutes, le jeu est en ligne sur `https://terra-vida-xxxx.onrender.com`.
+
+`render.yaml` démarre en **mode démonstration** (paiements simulés, code SMS affiché à l'écran),
+annoncé aux joueurs sur le site et dans le jeu. L'offre gratuite se met en veille sans visite
+(premier chargement lent) et **efface les données à chaque redémarrage** : pour garder les comptes,
+passer à une offre payante avec un disque (voir les commentaires de `render.yaml`).
+
+### Autres hébergeurs (Railway, Fly.io, VPS…)
+Le `Dockerfile` fournit une image prête : montez un volume persistant sur `/data`, exposez le port
+`PORT` (3000 par défaut) et définissez `PUBLIC_URL` (adresse publique en HTTPS) et `TRUST_PROXY=1`
+derrière un proxy. L'image démarre en `NODE_ENV=production` : le mode démo y est désactivé.
+
 ## Connexion par téléphone (code SMS)
 
 - **Nouveau joueur** : numéro → code à 6 chiffres reçu par SMS → pseudo + pays.
