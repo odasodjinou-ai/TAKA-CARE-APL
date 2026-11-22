@@ -13,6 +13,8 @@ import { Driving } from './driving.js';
 import { EngineSound, MusicBox, siren } from './audio.js';
 import { VEHICLE_BY_ID } from '/shared/vehicles.js';
 import { LOTS, HOUSE_TIERS, LOT_BY_ID, DEVICES, BUTTON_RADIUS, GARAGE_RADIUS } from '/shared/houses.js';
+import { APARTMENTS, TOLL, boothSpot } from '/shared/city.js';
+import { interiorLayout } from '/shared/interiors.js';
 import { $, h, toast, openPanel, closePanel, refreshPanel, panelOpen, PANELS, drawMinimap, phoneFlow } from './ui.js';
 
 const CREDS_KEY = 'terravida:creds';
@@ -190,6 +192,7 @@ const PANEL_TITLES = {
   account: '👤 Mon compte',
   house: '🏠 Maison',
   phone: '📱 Téléphone',
+  apartments: '🏢 Résidence d\'appartements',
   admin: '🛡️ Modération',
 };
 
@@ -205,8 +208,53 @@ function onClosePanel() {
 $('#panel-close').addEventListener('click', onClosePanel);
 $('#panel').addEventListener('click', (e) => e.target.id === 'panel' && onClosePanel());
 
+/** Obstacles actifs : la pièce si on est à l'intérieur, sinon la ville. */
+function activeColliders() {
+  return game.inside ? interiorLayout(game.inside.layout).colliders : world.layout.colliders;
+}
+
 function nearestPlace() {
   let best = null;
+  const near = (x, z, r) => {
+    const d = Math.hypot(me.pos.x - x, me.pos.z - z);
+    return d <= r && (!best || d < best.d) ? d : null;
+  };
+  if (game.inside) {
+    const lay = interiorLayout(game.inside.layout);
+    let d = near(lay.exit.x, lay.exit.z, 1.8);
+    if (d !== null) best = { d, p: { id: 'exit', label: 'Sortir' } };
+    if (game.inside.kind !== 'garage' && game.inside.kind !== 'aptgarage') {
+      d = near(lay.exit.x + 1.3, lay.exit.z, 1.4);
+      if (d !== null) best = { d: d - 5, p: { id: 'iswitch', label: `Interrupteur : 💡 Lumières (${game.insideDevices?.lights ? 'allumées' : 'éteintes'})` } };
+    }
+    lay.slots.forEach((sp, i) => {
+      const car = game.insideCars?.[i];
+      const dd = car ? near(sp.x, sp.z, 3) : null;
+      if (dd !== null) best = { d: dd, p: { id: 'takecar', slot: i, label: `Sortir ce véhicule (${VEHICLE_BY_ID.get(car.model)?.name ?? car.model})` } };
+    });
+    return best?.p ?? null;
+  }
+  // Postes de péage : prendre / finir son service
+  if (!me.inCar) {
+    for (const bx of TOLL.booths) {
+      const sp = boothSpot(bx);
+      const d = near(sp.x, sp.z, 2);
+      if (d !== null) best = { d, p: { id: 'toll', booth: bx, label: game.tollShift ? '🎫 Finir mon service de péagiste' : '🎫 Prendre mon service de péagiste' } };
+    }
+  }
+  // Résidence : en voiture, garer au parking
+  if (me.inCar && game.myApartment) {
+    const d = near(APARTMENTS.door.x, APARTMENTS.door.z, 12);
+    if (d !== null) best = { d, p: { id: 'aptpark', label: 'Garer au parking de la résidence' } };
+  }
+  // Portes des maisons : entrer chez soi / sonner chez les autres
+  if (!me.inCar) {
+    for (const [lotId, st] of game.houses ?? []) {
+      const lot = LOT_BY_ID.get(lotId);
+      const d = near(lot.house.x, lot.house.frontZ - lot.side * 1, 2.2);
+      if (d !== null) best = { d: d - 3, p: { id: 'enter', kind: 'house', lot: lotId, label: st.familyId === game.profile?.family?.id ? '🚪 Entrer dans la maison' : `🔔 Sonner chez la famille ${st.family}` } };
+    }
+  }
   for (const p of Object.values(PLACES)) {
     const d = Math.hypot(me.pos.x - p.door.x, me.pos.z - p.door.z);
     if (d <= INTERACT_RADIUS && (!best || d < best.d)) best = { p, d };
@@ -223,7 +271,7 @@ function nearestPlace() {
     }
     if (st.familyId === game.profile?.family?.id) {
       const d = Math.hypot(me.pos.x - lot.garage.x, me.pos.z - lot.garage.doorFront);
-      if (d <= (me.inCar ? GARAGE_RADIUS : 4) && (!best || d < best.d)) best = { d, p: { id: 'garage', lot: lotId, label: me.inCar ? 'Garer le véhicule au garage' : 'Garage familial' } };
+      if (d <= (me.inCar ? GARAGE_RADIUS : 3) && (!best || d < best.d)) best = { d, p: { id: 'garage', lot: lotId, label: me.inCar ? 'Garer le véhicule au garage' : '🚪 Entrer dans le garage' } };
     }
   }
   // Portails des maisons du quartier résidentiel
@@ -247,9 +295,20 @@ function interact() {
   if (p.id === 'button') return net.send('houseDevice', { lot: p.lot, device: p.device, via: 'button' });
   if (p.id === 'garage') {
     if (me.inCar) return net.send('garagePark', { lot: p.lot });
-    (game.phoneUi ??= { app: 'home', cam: 0, house: null }).app = 'garage';
-    return togglePanel('phone');
+    return net.send('enter', { kind: 'garage', lot: p.lot });
   }
+  if (p.id === 'enter') return net.send('enter', { kind: p.kind, lot: p.lot });
+  if (p.id === 'exit') return net.send('exit');
+  if (p.id === 'iswitch') {
+    const ref = game.inside.ref;
+    return ref.unit ? net.send('aptDevice', { unit: ref.unit, device: 'lights', via: 'button' }) : net.send('houseDevice', { lot: ref.lot, device: 'lights', via: 'button' });
+  }
+  if (p.id === 'takecar') {
+    const ref = game.inside.ref;
+    return ref.unit ? net.send('aptTake', { unit: ref.unit }) : net.send('garageTake', { lot: ref.lot, slot: p.slot });
+  }
+  if (p.id === 'aptpark') return net.send('aptPark', { unit: game.myApartment.unit });
+  if (p.id === 'toll') return net.send('tollShift', { on: !game.tollShift, booth: p.booth });
   togglePanel(p.id);
 }
 
@@ -303,7 +362,7 @@ function collideVehicle(pos, heading, L, W) {
   for (let i = 0; i <= n; i++) {
     const off = -L / 2 + W / 2 + ((L - W) * i) / n;
     const c = { x: pos.x + push.x + fx * off, z: pos.z + push.z + fz * off };
-    const moved = resolveCollisions({ ...c }, r, world.layout.colliders);
+    const moved = resolveCollisions({ ...c }, r, activeColliders());
     push = { x: push.x + moved.x - c.x, z: push.z + moved.z - c.z };
   }
   return push;
@@ -311,6 +370,7 @@ function collideVehicle(pos, heading, L, W) {
 
 function toggleCar() {
   if (!game.profile || cinematic) return;
+  if (game.inside) return toast('Sors d\'abord du bâtiment.', 'warn');
   if (me.inCar) {
     me.inCar = false;
     me.car.visible = false;
@@ -318,7 +378,7 @@ function toggleCar() {
     engine.stop();
     // On sort par la portière gauche
     const left = new THREE.Vector3(Math.cos(me.yaw), 0, -Math.sin(me.yaw)).multiplyScalar(-2.2);
-    const p = resolveCollisions({ x: me.pos.x + left.x, z: me.pos.z + left.z }, 0.45, world.layout.colliders);
+    const p = resolveCollisions({ x: me.pos.x + left.x, z: me.pos.z + left.z }, 0.45, activeColliders());
     me.pos.set(p.x, 0, p.z);
     me.carSpeed = 0;
     net.send('car', { on: false });
@@ -373,7 +433,7 @@ class Remote {
   setInfo(info) {
     this.info = info;
     this.character.setSkin(info.skin);
-    const job = info.job ? JOBS[info.job]?.icon ?? '' : '';
+    const job = info.job === 'toll' ? '🎫' : info.job ? JOBS[info.job]?.icon ?? '' : '';
     const lines = [h('div', {}, info.premium ? h('span', { class: 'premium' }, '⭐ ') : null, h('b', {}, info.name), job ? h('span', { class: 'job' }, ` ${job}`) : null)];
     if (info.family) lines.push(h('div', { class: 'fam' }, `« ${info.family} »`));
     this.tagEl.replaceChildren(...lines);
@@ -456,7 +516,7 @@ function updatePlayer(dt) {
   speedo.classList.toggle('hidden', !me.inCar);
   const fwd = (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) - (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0) + joy.y;
   const side = (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) - (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0) + joy.x;
-  const colliders = world.layout.colliders;
+  const colliders = activeColliders();
   const blocked = typing() || panelOpen();
 
   if (!me.inCar) {
@@ -543,7 +603,7 @@ function updatePlayer(dt) {
 
 function updateCamera(dt) {
   const target = tmpV.copy(me.pos).add(new THREE.Vector3(0, me.inCar ? 1.6 : 1.5, 0));
-  const dist = me.inCar ? Math.max(cam.dist, 9) : cam.dist;
+  const dist = game.inside ? Math.min(cam.dist, 4.2) : me.inCar ? Math.max(cam.dist, 9) : cam.dist;
   const want = new THREE.Vector3(
     target.x + Math.sin(cam.yaw) * Math.cos(cam.pitch) * dist,
     target.y + Math.sin(cam.pitch) * dist,
@@ -662,6 +722,7 @@ function frame() {
       updateCamera(dt);
     }
     for (const r of game.remotes.values()) r.update(dt);
+    world.tollVehicles = [...(me.inCar ? [me.pos] : []), ...[...game.remotes.values()].filter((r) => r.car).map((r) => r.pos)];
     world.update(dt, cinematic ? world.cinePlane.position : me.pos, time);
     hudTimer -= dt;
     if (hudTimer <= 0) {
@@ -678,8 +739,11 @@ function frame() {
   renderer.render(scene, camera);
   labels.render(scene, camera);
   if (world.code && me.character) {
-    const d = world.musicNear(me.pos);
-    music.setVolume(d < 40 ? 0.12 * (1 - d / 40) : 0);
+    if (game.inside) music.setVolume(world.interior?.music ? 0.12 : 0);
+    else {
+      const d = world.musicNear(me.pos);
+      music.setVolume(d < 40 ? 0.12 * (1 - d / 40) : 0);
+    }
   }
   renderCctv(time);
 }
@@ -874,6 +938,7 @@ net.on('pleave', (m) => {
   game.remotes.delete(m.sid);
 });
 net.on('correct', (m) => {
+  if (m.stop && me.drive) me.drive.reset(me.yaw);
   me.pos.x = m.x;
   me.pos.z = m.z;
 });
@@ -1069,7 +1134,7 @@ net.on('carTaken', (m) => {
   closePanel();
   me.carOverride = { car: m.model, carColor: m.color };
   makeMyCar(me.carOverride);
-  const lot = [...(game.houses?.keys() ?? [])].map((id) => LOT_BY_ID.get(id)).find((l) => Math.hypot(me.pos.x - l.garage.x, me.pos.z - l.garage.doorFront) < GARAGE_RADIUS + 2);
+  const lot = m.placed ? null : [...(game.houses?.keys() ?? [])].map((id) => LOT_BY_ID.get(id)).find((l) => Math.hypot(me.pos.x - l.garage.x, me.pos.z - l.garage.doorFront) < GARAGE_RADIUS + 2);
   if (lot) {
     me.pos.set(lot.garage.x, 0, lot.garage.doorFront - lot.side * 3);
     me.yaw = lot.side < 0 ? 0 : Math.PI;
@@ -1086,6 +1151,51 @@ net.on('alarm', (m) => {
   toast(`🚨 Alarme ! Propriété privée de la famille « ${m.family} ».`, 'error');
 });
 addEventListener('phoneclosed', () => (game.cctv = null));
+
+// Intérieurs
+net.on('interior', (m) => {
+  closePanel();
+  clearRemotes();
+  const st = m.ref.unit ? game.apartments?.find((a) => a.unit === m.ref.unit) : game.houses?.get(m.ref.lot);
+  game.inside = { kind: m.kind, layout: m.layout, key: m.key, ref: m.ref, title: m.title };
+  game.insideDevices = st?.devices ?? {};
+  game.insideCars = m.kind === 'garage' || m.kind === 'aptgarage' ? st?.garage ?? [] : [];
+  world.buildInterior(m.layout, { devices: game.insideDevices, cars: game.insideCars });
+  for (const p of m.players) game.remotes.set(p.sid, new Remote(p));
+  me.pos.set(m.pos.x, 0, m.pos.z);
+  me.yaw = Math.PI;
+  cam.yaw = 0;
+  cam.pitch = 0.35;
+  camera.position.set(m.pos.x, 2.5, m.pos.z + 3);
+  toast(`🚪 ${m.title}`);
+});
+net.on('exterior', (m) => {
+  game.inside = null;
+  game.insideCars = [];
+  world.clearInterior();
+  clearRemotes();
+  for (const p of m.players) game.remotes.set(p.sid, new Remote(p));
+  me.pos.set(m.pos.x, 0, m.pos.z);
+  me.yaw = m.pos.ry ?? 0;
+  cam.yaw = me.yaw + Math.PI;
+  camera.position.set(m.pos.x, 6, m.pos.z + 8);
+});
+net.on('interiorDevices', (m) => {
+  game.insideDevices = m.devices;
+  world.setInteriorDevices(m.devices);
+});
+net.on('apartments', (m) => {
+  (game.apartmentsByCountry ??= new Map()).set(m.country, m.apartments);
+  if (m.country === game.country) {
+    game.apartments = m.apartments;
+    game.myApartment = m.apartments.find((a) => !a.free && a.renterId === game.myKey) ?? null;
+  }
+  if (['apartments', 'phone'].includes(panelOpen())) refreshPanel();
+});
+net.on('tollPaid', (m) => toast(m.fee ? `🎫 Péage : −${formatMoney(m.fee)}` : '🎫 Péage : gratuit (Premium ⭐)'));
+net.on('pinfo', (m) => {
+  if (m.p.sid === game.sid) game.tollShift = m.p.job === 'toll';
+});
 net.on('teleport', (m) => {
   if (me.inCar) toggleCar();
   me.pos.set(m.x, 0, m.z);

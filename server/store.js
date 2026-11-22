@@ -18,7 +18,7 @@ export class Store {
     this.file = file;
     this.saveDelayMs = saveDelayMs;
     this.timer = null;
-    this.data = { players: {}, families: {}, orders: {}, counters: {}, houses: {} };
+    this.data = { players: {}, families: {}, orders: {}, counters: {}, houses: {}, apartments: {} };
     if (file && fs.existsSync(file)) {
       try {
         const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -28,6 +28,7 @@ export class Store {
         this.data.counters = parsed.counters ?? {};
         this.data.reports = parsed.reports ?? [];
         this.data.houses = parsed.houses ?? {};
+        this.data.apartments = parsed.apartments ?? {};
         for (const f of Object.values(this.data.families)) {
           f.treasury ??= 0;
           f.treasuryLog ??= [];

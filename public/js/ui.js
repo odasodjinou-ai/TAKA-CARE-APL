@@ -10,6 +10,7 @@ import {
 import { VEHICLES, VEHICLE_BY_ID, BRANDS, CATEGORIES } from '/shared/vehicles.js';
 import { createCar, disposeCar } from './vehicles.js';
 import { LOTS, LOT_BY_ID, HOUSE_TIERS, MAX_HOUSES_PER_FAMILY, SELL_REFUND, RESIDENTIAL, devicesFor } from '/shared/houses.js';
+import { APARTMENTS, TOLL, HIGHWAY, RIVER } from '/shared/city.js';
 import { ROAD_LINES, WORLD, PLACES } from '/shared/layout.js';
 
 export const $ = (sel) => document.querySelector(sel);
@@ -477,7 +478,15 @@ export function drawMinimap(canvas, { pos, yaw, remotes, mission, houses, myFami
   ctx.lineTo(tx(260), tz(0));
   ctx.moveTo(tx(RESIDENTIAL.fromX), tz(0));
   ctx.lineTo(tx(RESIDENTIAL.toX), tz(0));
+  ctx.moveTo(tx(HIGHWAY.x), tz(HIGHWAY.toZ));
+  ctx.lineTo(tx(HIGHWAY.x), tz(HIGHWAY.fromZ));
   ctx.stroke();
+  ctx.fillStyle = '#1d4ed8';
+  ctx.fillRect(0, tz(RIVER.z - RIVER.w / 2), S, RIVER.w * k); // fleuve
+  ctx.fillStyle = '#94a3b8';
+  ctx.fillRect(tx(-7), tz(RIVER.z - RIVER.w / 2 - 8), 14 * k, (RIVER.w + 16) * k); // pont
+  ctx.fillStyle = '#facc15';
+  ctx.fillRect(tx(-TOLL.w / 2), tz(TOLL.z - 1), TOLL.w * k, 2 * k); // péage
   // Maisons : vertes = ta famille, grises = vendues, contour = à vendre
   for (const lot of LOTS) {
     const o = houses?.get(lot.id);
@@ -486,7 +495,7 @@ export function drawMinimap(canvas, { pos, yaw, remotes, mission, houses, myFami
     ctx.fillRect(tx(hs.x - hs.w / 2), tz(hs.z - hs.d / 2), hs.w * k, hs.d * k);
   }
   ctx.fillStyle = '#334155';
-  ctx.fillRect(tx(325), tz(-320), 40 * k, 640 * k); // piste
+  ctx.fillRect(tx(325), tz(-250), 40 * k, 500 * k); // piste
   for (const p of Object.values(PLACES)) {
     ctx.fillStyle = p.color;
     ctx.beginPath();
@@ -993,8 +1002,8 @@ PANELS.phone = (game) => {
   const bar = h('div', { class: 'phone-bar' }, h('span', {}, game.clock?.() ?? ''), h('span', {}, '📶 🔋'));
   const back = h('button', { class: 'btn ghost', onclick: go('home') }, '‹ Accueil');
   let screen;
-  if (!game.profile.family) screen = h('p', { class: 'muted' }, 'Rejoins une famille et achetez une maison pour utiliser la maison connectée.');
-  else if (!houses.length) screen = h('p', { class: 'muted' }, 'Ta famille n\'a pas encore de maison. Les appareils, caméras et le garage apparaîtront ici.');
+  const apt = game.myApartment;
+  if (!houses.length && !apt) screen = h('p', { class: 'muted' }, 'Achète une maison avec ta famille ou loue un appartement à la résidence : les appareils, caméras et le garage apparaîtront ici.');
   else if (ph.app === 'home') {
     screen = h(
       'div',
@@ -1022,11 +1031,17 @@ PANELS.phone = (game) => {
           }),
         ),
       ),
+      aptCard(game),
       h('p', { class: 'muted' }, 'Tu peux aussi utiliser les interrupteurs sur la maison (touche E).'),
     );
   } else if (ph.app === 'cams') {
     const here = houses.filter((x) => x.country === game.country);
-    if (!here.length) {
+    if (!here.length && apt) {
+      const cam = { id: 1, label: 'Entrée de la résidence', pos: [12.4, 4, 95], look: [0, 1, 88] };
+      const view = (game.cctvCanvas ??= h('canvas', { width: 320, height: 180, class: 'cctv' }));
+      game.cctv = { cam, canvas: view, label: 'CAM 1 · Résidence' };
+      screen = h('div', {}, back, h('p', {}, `🏢 Appartement n°${apt.unit}`), view, h('p', { class: 'muted' }, '1 caméra filme l\'entrée de la résidence.'));
+    } else if (!here.length) {
       game.cctv = null;
       screen = h('div', {}, back, h('p', { class: 'muted' }, 'Hors de portée : les caméras se consultent quand tu es dans le même pays que la maison.'));
     } else {
@@ -1078,8 +1093,83 @@ PANELS.phone = (game) => {
           x.country === game.country ? h('button', { class: 'btn primary', onclick: () => game.net.send('garagePark', { lot: x.lot }) }, '🅿️ Garer mon véhicule ici') : h('p', { class: 'muted' }, 'Garage dans un autre pays.'),
         );
       }),
+      apt ? h('div', { class: 'phone-card' }, h('b', {}, `🏢 Parking de la résidence — place n°${apt.unit}`), h('div', { class: 'phone-row' }, h('span', {}, apt.garage?.[0] ? `🚗 ${VEHICLE_BY_ID.get(apt.garage[0].model)?.name ?? apt.garage[0].model}` : 'Place libre')), h('p', { class: 'muted' }, 'Gare-toi devant la résidence (E) ; pour sortir le véhicule, entre dans le parking depuis la résidence.')) : null,
       h('p', { class: 'muted' }, 'Pour garer ou sortir un véhicule, approche-toi du garage. Les véhicules des autres membres peuvent être empruntés : ils y retournent quand tu descends.'),
     );
   }
   return h('div', { class: 'phone' }, bar, h('div', { class: 'phone-screen' }, screen));
+};
+
+function aptCard(game) {
+  const apt = game.myApartment;
+  if (!apt) return null;
+  return h(
+    'div',
+    { class: 'phone-card' },
+    h('b', {}, `🏢 Appartement n°${apt.unit}`),
+    ['lights', 'alarm', 'music'].map((id) => {
+      const d = { lights: ['💡', 'Lumières'], alarm: ['🚨', 'Alarme'], music: ['🎵', 'Musique'] }[id];
+      const on = !!apt.devices?.[id];
+      return h('div', { class: 'phone-row' }, h('span', {}, `${d[0]} ${d[1]}`), h('button', { class: `toggle ${on ? 'on' : ''}`, onclick: () => game.net.send('aptDevice', { country: game.country, unit: apt.unit, device: id, via: 'phone' }) }, h('i', {})));
+    }),
+  );
+}
+
+// --- Résidence d'appartements ---------------------------------------------------------------
+PANELS.apartments = (game) => {
+  const list = game.apartments ?? [];
+  const mine = game.myApartment;
+  const p = game.profile;
+  const head = h(
+    'p',
+    { class: 'muted' },
+    `Pour ceux qui n'ont pas encore de maison : loyer ${formatMoney(APARTMENTS.rent)} pour 7 jours. Mêmes avantages qu'une maison : apparition à l'entrée, retour rapide, 1 place de parking, 1 caméra, lumières, alarme et musique pilotables par téléphone ou interrupteur.`,
+  );
+  if (mine) {
+    const fam = mine.renterId !== game.myKey;
+    return h(
+      'div',
+      {},
+      head,
+      h(
+        'div',
+        { class: 'premium-card' },
+        h('p', { style: 'margin-top:0' }, h('b', {}, `🏢 Appartement n°${mine.unit}`), fam ? ` — loué par ${mine.renter} (ta famille)` : '', h('br'), `Location jusqu'au ${new Date(mine.until).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })}`),
+        h(
+          'div',
+          { class: 'row' },
+          h('button', { class: 'btn primary', onclick: () => game.net.send('enter', { kind: 'apt', unit: mine.unit }) }, '🚪 Entrer chez moi'),
+          h('button', { class: 'btn', onclick: () => game.net.send('enter', { kind: 'aptgarage', unit: mine.unit }) }, '🅿️ Aller au parking'),
+        ),
+        fam
+          ? null
+          : h(
+              'div',
+              { class: 'row' },
+              h('button', { class: 'btn', disabled: p.money < APARTMENTS.rent, onclick: () => game.net.send('aptRenew', { country: game.country, unit: mine.unit }) }, `Prolonger 7 jours (${formatMoney(APARTMENTS.rent)})`),
+              h('button', { class: 'btn danger', onclick: () => confirm('Rendre l\'appartement ? Le loyer déjà payé n\'est pas remboursé.') && game.net.send('aptLeave', { country: game.country, unit: mine.unit }) }, 'Rendre l\'appartement'),
+            ),
+      ),
+    );
+  }
+  return h(
+    'div',
+    {},
+    head,
+    h(
+      'div',
+      { class: 'grid' },
+      list.map((a) =>
+        h(
+          'div',
+          { class: `pack ${a.free ? '' : 'sel'}`, style: a.free ? '' : 'opacity:0.55;cursor:default' },
+          h('div', { class: 'v' }, `n°${a.unit}`),
+          h('div', { class: 'meta' }, `${Math.floor(a.unit / 100)}ᵉ étage`),
+          a.free
+            ? h('button', { class: 'btn primary', style: 'margin-top:6px', disabled: p.money < APARTMENTS.rent, onclick: () => confirm(`Louer l'appartement n°${a.unit} pour ${formatMoney(APARTMENTS.rent)} (7 jours) ?`) && game.net.send('aptRent', { unit: a.unit }) }, 'Louer')
+            : h('div', { class: 'meta' }, `Occupé · ${a.renter}`),
+        ),
+      ),
+    ),
+  );
 };

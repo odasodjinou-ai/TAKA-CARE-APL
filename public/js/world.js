@@ -9,6 +9,8 @@ import { createCar, createPlane, spinWheels, disposeCar, setLights } from './veh
 import { VEHICLES } from '/shared/vehicles.js';
 import { LOTS, HOUSE_TIERS, RESIDENTIAL, DEFAULT_HOUSE_COLORS } from '/shared/houses.js';
 import { formatMoney } from '/shared/catalog.js';
+import { INTERSECTIONS, STOP_OFFSET, lightState, HIGHWAY, RIVER, BRIDGE, TOLL, APARTMENTS } from '/shared/city.js';
+import { interiorLayout, ORIGIN } from '/shared/interiors.js';
 
 const DAY_SECONDS = 24 * 60; // une journée = 24 minutes réelles
 
@@ -252,6 +254,13 @@ export class World {
     this.stars = new THREE.Points(starGeo, new THREE.PointsMaterial({ color: '#ffffff', size: 2, sizeAttenuation: false, transparent: true, fog: false }));
     scene.add(this.stars);
 
+    // Éclairage des intérieurs (placé une fois pour éviter de recompiler les shaders)
+    this.interiorLight = new THREE.PointLight('#ffe8c4', 0, 18, 1.6);
+    this.interiorLight.position.set(ORIGIN.x - 3, 2.7, ORIGIN.z);
+    this.interiorLight2 = new THREE.PointLight('#ffe8c4', 0, 18, 1.6);
+    this.interiorLight2.position.set(ORIGIN.x + 3, 2.7, ORIGIN.z);
+    scene.add(this.interiorLight, this.interiorLight2);
+
     // Marqueurs d'interaction & de mission
     this.markerGeo = new THREE.TorusGeometry(2.2, 0.12, 8, 40).rotateX(Math.PI / 2);
     this.missionMarker = this.makeBeacon('#facc15');
@@ -363,9 +372,9 @@ export class World {
 
     // --- Aéroport ---
     const concMat = new THREE.MeshStandardMaterial({ map: tex.concrete.clone(), roughness: 0.9 });
-    concMat.map.repeat.set(14, 60);
+    concMat.map.repeat.set(14, 48);
     concMat.map.needsUpdate = true;
-    const apron = add(new THREE.Mesh(new THREE.PlaneGeometry(130, 660).rotateX(-Math.PI / 2), concMat));
+    const apron = add(new THREE.Mesh(new THREE.PlaneGeometry(130, 520).rotateX(-Math.PI / 2), concMat));
     apron.position.set(318, 0.04, 0);
     apron.receiveShadow = true;
     const rw = AIRPORT.runway;
@@ -434,8 +443,41 @@ export class World {
       } else if (b.kind === 'hangar') {
         mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: b.color, roughness: 0.5, metalness: 0.6 }));
       } else {
-        // Bâtiments spéciaux (emplois, boutique, concession)
+        // Bâtiments spéciaux (emplois, boutique, concession, résidence)
         const place = PLACES[b.place];
+        if (place.id === 'apartments') {
+          // Tour d'appartements : façade fenêtrée, balcons, enseigne
+          const { map, emissive } = facadeTextures(424242, 'plain');
+          const side = new THREE.MeshStandardMaterial({ color: '#e9d5ff', map, emissiveMap: emissive, emissive: '#ffffff', emissiveIntensity: 0, roughness: 0.8 });
+          side.map.repeat.set(6, 5);
+          side.emissiveMap.repeat.set(6, 5);
+          nightMats.push(side);
+          mesh = new THREE.Mesh(geo, [side, side, new THREE.MeshStandardMaterial({ color: '#57534e' }), side, side, side]);
+          const balcMat = new THREE.MeshStandardMaterial({ color: '#f8fafc', roughness: 0.6 });
+          for (let fl = 1; fl <= APARTMENTS.floors; fl++) {
+            for (let i = -1; i <= 1; i++) {
+              const bal = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.12, 6), balcMat);
+              bal.position.set(-b.w / 2 - 0.7, fl * 5.2 - b.h / 2, i * 10);
+              bal.castShadow = true;
+              mesh.add(bal);
+              const rail = new THREE.Mesh(new THREE.BoxGeometry(0.08, 1, 6), balcMat);
+              rail.position.set(-b.w / 2 - 1.35, fl * 5.2 - b.h / 2 + 0.5, i * 10);
+              mesh.add(rail);
+            }
+          }
+          const hall = new THREE.Mesh(new THREE.BoxGeometry(0.3, 3, 4), new THREE.MeshPhysicalMaterial({ color: '#1e3a5f', roughness: 0.05, metalness: 0.4 }));
+          hall.position.set(-b.w / 2 - 0.1, 1.5 - b.h / 2, 0);
+          mesh.add(hall);
+          this.addSign(mesh, place, b, -1);
+          // Caméra de l'entrée de la résidence
+          const cam = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.22, 0.22), new THREE.MeshStandardMaterial({ color: '#f8fafc' }));
+          cam.position.set(-b.w / 2 - 0.2, 4 - b.h / 2, 5);
+          mesh.add(cam);
+          mesh.position.set(b.x, b.h / 2, b.z);
+          mesh.castShadow = mesh.receiveShadow = true;
+          add(mesh);
+          continue;
+        }
         const wall = new THREE.MeshStandardMaterial({ color: '#f8fafc', roughness: 0.6 });
         const glassMat = new THREE.MeshPhysicalMaterial({ color: '#1e3a5f', roughness: 0.05, metalness: 0.4, clearcoat: 1 });
         mesh = new THREE.Mesh(geo, wall);
@@ -476,28 +518,51 @@ export class World {
       jet.position.set(p.x, 2, p.z);
     }
 
-    // Lampadaires (instanciés)
+    // Lampadaires (instanciés) : rues, avenue résidentielle, nationale et pont
     const lampPositions = [];
     for (const l of ROAD_LINES) {
       for (let v = -170; v <= 170; v += 30) {
-        lampPositions.push([l + 7.5, v + 15], [v + 15, l - 7.5]);
+        lampPositions.push([l + 7.5, v + 15, -Math.PI / 2], [v + 15, l - 7.5, 0]);
       }
     }
+    for (let z = -200; z >= HIGHWAY.fromZ + 10; z -= 30) if (Math.abs(z - TOLL.z) > 20) lampPositions.push([HIGHWAY.x + 7.5, z, -Math.PI / 2], [HIGHWAY.x - 7.5, z - 15, Math.PI / 2]);
+    for (let x = -200; x >= RESIDENTIAL.fromX + 5; x -= 30) lampPositions.push([x, -7.5, 0]);
     const poleGeo = mergeGeometries([new THREE.CylinderGeometry(0.1, 0.14, 6, 6).translate(0, 3, 0), new THREE.BoxGeometry(0.1, 0.1, 1.4).translate(0, 6, 0.6)]);
     const poles = new THREE.InstancedMesh(poleGeo, new THREE.MeshStandardMaterial({ color: '#374151', roughness: 0.5, metalness: 0.7 }), lampPositions.length);
     const bulbMat = new THREE.MeshStandardMaterial({ color: '#fff7d6', emissive: '#ffd58a', emissiveIntensity: 0 });
     const bulbs = new THREE.InstancedMesh(new THREE.SphereGeometry(0.22, 8, 6).translate(0, 5.85, 1.2), bulbMat, lampPositions.length);
+    // Halo lumineux au sol (visible la nuit)
+    const glowTex = (() => {
+      const c = document.createElement('canvas');
+      c.width = c.height = 128;
+      const ctx = c.getContext('2d');
+      const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+      g.addColorStop(0, 'rgba(255,214,140,0.9)');
+      g.addColorStop(0.5, 'rgba(255,200,120,0.35)');
+      g.addColorStop(1, 'rgba(255,200,120,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, 128, 128);
+      const t = new THREE.CanvasTexture(c);
+      t.colorSpace = THREE.SRGBColorSpace;
+      return t;
+    })();
+    this.glowMat = new THREE.MeshBasicMaterial({ map: glowTex, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending });
+    const glows = new THREE.InstancedMesh(new THREE.PlaneGeometry(11, 11).rotateX(-Math.PI / 2).translate(0, 0.12, 1.4), this.glowMat, lampPositions.length);
     const dummy = new THREE.Object3D();
-    lampPositions.forEach(([x, z], i) => {
+    lampPositions.forEach(([x, z, ry], i) => {
       dummy.position.set(x, 0, z);
-      dummy.rotation.y = Math.round(x / 7.5) % 2 ? Math.PI / 2 : 0;
+      dummy.rotation.set(0, ry, 0);
       dummy.updateMatrix();
       poles.setMatrixAt(i, dummy.matrix);
       bulbs.setMatrixAt(i, dummy.matrix);
+      glows.setMatrixAt(i, dummy.matrix);
     });
     poles.castShadow = true;
     add(poles);
     add(bulbs);
+    add(glows);
+    this.buildTrafficLights(add);
+    this.buildHighway(add, strip, roadMat);
     this.lampMat = bulbMat;
 
     // Végétation
@@ -538,6 +603,295 @@ export class World {
     }
 
     this.updateEnvironment(true);
+  }
+
+  /** Feux tricolores : 4 poteaux par carrefour, lampes instanciées dont la couleur suit le cycle partagé. */
+  buildTrafficLights(add) {
+    const poles = [];
+    for (const it of INTERSECTIONS) {
+      // [x, z, orientation, axe contrôlé]
+      poles.push([it.x + 6.5, it.z + 6.5, 0, 'ns'], [it.x - 6.5, it.z - 6.5, Math.PI, 'ns'], [it.x - 6.5, it.z + 6.5, -Math.PI / 2, 'ew'], [it.x + 6.5, it.z - 6.5, Math.PI / 2, 'ew']);
+    }
+    const poleGeo = mergeGeometries([new THREE.CylinderGeometry(0.09, 0.11, 3.2, 6).translate(0, 1.6, 0), new THREE.BoxGeometry(0.42, 1.15, 0.3).translate(0, 3.6, 0)]);
+    const poleMesh = new THREE.InstancedMesh(poleGeo, new THREE.MeshStandardMaterial({ color: '#1f2937', roughness: 0.6 }), poles.length);
+    const lamps = new THREE.InstancedMesh(new THREE.SphereGeometry(0.12, 10, 8), new THREE.MeshBasicMaterial({ toneMapped: false }), poles.length * 3);
+    const dummy = new THREE.Object3D();
+    poles.forEach(([x, z, ry], i) => {
+      dummy.position.set(x, 0, z);
+      dummy.rotation.set(0, ry, 0);
+      dummy.updateMatrix();
+      poleMesh.setMatrixAt(i, dummy.matrix);
+      for (let k = 0; k < 3; k++) {
+        const o = new THREE.Vector3(0, 3.95 - k * 0.35, 0.17).applyAxisAngle(new THREE.Vector3(0, 1, 0), ry);
+        dummy.position.set(x + o.x, o.y, z + o.z);
+        dummy.updateMatrix();
+        lamps.setMatrixAt(i * 3 + k, dummy.matrix);
+      }
+    });
+    poleMesh.castShadow = true;
+    add(poleMesh);
+    add(lamps);
+    this.lights = { lamps, axes: poles.map((p) => p[3]), key: '' };
+    this.updateTrafficLights(true);
+  }
+
+  updateTrafficLights(force = false) {
+    const L = this.lights;
+    if (!L) return;
+    const ns = lightState('ns');
+    const ew = lightState('ew');
+    const key = ns + ew;
+    if (key === L.key && !force) return;
+    L.key = key;
+    const OFF = new THREE.Color('#2a2a2a');
+    const C = { red: new THREE.Color('#ff2020'), yellow: new THREE.Color('#ffb000'), green: new THREE.Color('#20ff60') };
+    L.axes.forEach((axis, i) => {
+      const st = axis === 'ns' ? ns : ew;
+      ['red', 'yellow', 'green'].forEach((name, k) => L.lamps.setColorAt(i * 3 + k, st === name ? C[name] : OFF));
+    });
+    L.lamps.instanceColor.needsUpdate = true;
+  }
+
+  /** Nationale vers le nord, pont sur le fleuve, plateforme de péage avec barrières. */
+  buildHighway(add, strip, roadMat) {
+    const len = HIGHWAY.toZ - HIGHWAY.fromZ;
+    strip(HIGHWAY.x, (HIGHWAY.toZ + HIGHWAY.fromZ) / 2, HIGHWAY.w, len, false, roadMat, 0.06, 14);
+    const conc = new THREE.MeshStandardMaterial({ color: '#9ca3af', roughness: 0.8 });
+    const dark = new THREE.MeshStandardMaterial({ color: '#374151', roughness: 0.85 });
+    const white = new THREE.MeshStandardMaterial({ color: '#f8fafc', roughness: 0.5 });
+    const red = new THREE.MeshStandardMaterial({ color: '#dc2626', roughness: 0.5 });
+    const box = (w, h, d, mat, x, y, z) => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+      m.position.set(x, y, z);
+      m.castShadow = true;
+      m.receiveShadow = true;
+      add(m);
+      return m;
+    };
+    // Plateforme de péage
+    box(TOLL.w, 0.06, TOLL.len, dark, HIGHWAY.x, 0.05, TOLL.z).castShadow = false;
+    box(TOLL.w + 2, 0.6, 12, white, HIGHWAY.x, 6.3, TOLL.z); // auvent
+    const sign = new THREE.Mesh(new THREE.PlaneGeometry(10, 1.6), new THREE.MeshBasicMaterial({ map: signTexture(`PÉAGE · ${formatMoney(TOLL.fee)}`, '#1d4ed8', 54), side: THREE.DoubleSide }));
+    sign.position.set(HIGHWAY.x, 7.4, TOLL.z + 6.05);
+    sign.rotation.y = 0;
+    add(sign);
+    for (const x of [-TOLL.w / 2 - 0.5, TOLL.w / 2 + 0.5]) box(0.5, 6, 0.5, white, x, 3, TOLL.z);
+    for (const bx of TOLL.booths) {
+      box(1.6, 0.25, 6, white, bx, 0.12, TOLL.z); // îlot
+      box(1.5, 2.6, 3.2, white, bx, 1.4, TOLL.z); // cabine
+      box(1.52, 1, 2.6, new THREE.MeshPhysicalMaterial({ color: '#1e3a5f', roughness: 0.05, metalness: 0.4 }), bx, 1.9, TOLL.z);
+      box(0.3, 6, 0.3, white, bx, 3, TOLL.z + 2.6);
+    }
+    // Barrières (une par voie), animées dans update()
+    this.barriers = TOLL.lanes.map((lx) => {
+      const pivot = new THREE.Group();
+      pivot.position.set(lx - 2.6, 1.05, TOLL.z - 1.8);
+      const arm = new THREE.Mesh(new THREE.BoxGeometry(5, 0.14, 0.14), red);
+      arm.position.x = 2.5;
+      for (let i = 0; i < 5; i++) {
+        const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.15, 0.15), white);
+        stripe.position.x = 0.5 + i;
+        arm.add(stripe);
+      }
+      pivot.add(arm);
+      add(pivot);
+      return { pivot, lane: lx, open: 0, hold: 0 };
+    });
+
+    // Pont : tablier, garde-corps, piles
+    const deck = box(BRIDGE.w, 0.6, BRIDGE.len, conc, BRIDGE.x, -0.27, BRIDGE.z);
+    deck.receiveShadow = true;
+    strip(BRIDGE.x, BRIDGE.z, HIGHWAY.w, BRIDGE.len, false, roadMat, 0.07, 14);
+    for (const sx of [-1, 1]) {
+      box(0.3, 1.1, BRIDGE.len, white, BRIDGE.x + sx * (BRIDGE.w / 2 - 0.15), 0.55, BRIDGE.z);
+      for (const dz of [-RIVER.w / 4, RIVER.w / 4]) box(2, 5, 2, conc, BRIDGE.x + sx * 4, -2.8, BRIDGE.z + dz);
+    }
+    // Panneau à l'entrée de la nationale
+    const n = new THREE.Mesh(new THREE.PlaneGeometry(6, 1.4), new THREE.MeshBasicMaterial({ map: signTexture('N1 · NATIONALE', '#15803d', 60), side: THREE.DoubleSide }));
+    n.position.set(HIGHWAY.x + 8, 4, -195);
+    add(n);
+
+    // Circulation sur la nationale (s'arrête au péage)
+    this.highwayTraffic = [];
+    const r = mulberry32(this.layout.seed ^ 0x7070);
+    const models = ['sakura-corsa', 'hanbit-tusk', 'savane-gbaka', 'liberty-box', 'lumiere-cargo', 'dragonfly-mountain'];
+    for (let i = 0; i < 6; i++) {
+      const dir = i % 2 ? 1 : -1; // -1 = vers le nord
+      const car = createCar(models[i], ['#f8fafc', '#1f2937', '#b91c1c', '#0f766e', '#facc15', '#64748b'][i]);
+      this.trafficGroup.add(car);
+      this.highwayTraffic.push({ car, dir, lane: dir < 0 ? TOLL.lanes[i % 2 ? 2 : 3] : TOLL.lanes[i % 2 ? 1 : 0], z: HIGHWAY.toZ - r() * len, speed: 14 + r() * 5, wait: 0, paid: false });
+    }
+  }
+
+  /** Construit un intérieur meublé (maison, appartement ou garage). */
+  buildInterior(kind, { devices = {}, cars = [] } = {}) {
+    this.clearInterior();
+    const lay = interiorLayout(kind);
+    const g = new THREE.Group();
+    const mat = (c, r = 0.8, extra = {}) => new THREE.MeshStandardMaterial({ color: c, roughness: r, ...extra });
+    const box = (w, h, d, m, x, y, z, rot = 0, parent = g) => {
+      const o = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
+      o.position.set(x, y, z);
+      o.rotation.y = rot;
+      o.castShadow = true;
+      o.receiveShadow = true;
+      parent.add(o);
+      return o;
+    };
+    const garage = kind === 'garage';
+    const floor = garage ? mat('#6b7280', 0.9) : mat('#c8a27a', 0.6);
+    const walls = garage ? mat('#d1d5db') : mat('#f5efe6');
+    box(lay.w, 0.1, lay.d, floor, ORIGIN.x, -0.05, ORIGIN.z);
+    box(lay.w, 0.1, lay.d, mat('#fafafa'), ORIGIN.x, lay.h, ORIGIN.z); // plafond
+    const hw = lay.w / 2;
+    const hd = lay.d / 2;
+    box(lay.w, lay.h, 0.2, walls, ORIGIN.x, lay.h / 2, ORIGIN.z - hd - 0.1);
+    box(0.2, lay.h, lay.d, walls, ORIGIN.x - hw - 0.1, lay.h / 2, ORIGIN.z);
+    box(0.2, lay.h, lay.d, walls, ORIGIN.x + hw + 0.1, lay.h / 2, ORIGIN.z);
+    box(hw - 0.7, lay.h, 0.2, walls, ORIGIN.x - (hw + 0.7) / 2, lay.h / 2, ORIGIN.z + hd + 0.1);
+    box(hw - 0.7, lay.h, 0.2, walls, ORIGIN.x + (hw + 0.7) / 2, lay.h / 2, ORIGIN.z + hd + 0.1);
+    box(1.4, 2.3, 0.1, garage ? mat('#e5e7eb') : mat('#6b3f1f', 0.7), ORIGIN.x, 1.15, ORIGIN.z + hd + 0.12); // porte
+    // Interrupteur (lumières) à côté de la porte
+    box(0.22, 0.3, 0.05, mat('#f8fafc'), lay.exit.x + 1.3, 1.3, ORIGIN.z + hd - 0.03);
+    box(0.1, 0.1, 0.03, mat('#facc15', 0.4, { emissive: '#facc15', emissiveIntensity: 0.5 }), lay.exit.x + 1.3, 1.3, ORIGIN.z + hd - 0.07);
+    // Plafonniers (s'allument avec les lumières)
+    const ceilMat = mat('#fff7d6', 0.3, { emissive: '#ffe3a3', emissiveIntensity: 0 });
+    for (const dx of [-lay.w / 4, lay.w / 4]) box(1.2, 0.08, 1.2, ceilMat, ORIGIN.x + dx, lay.h - 0.06, ORIGIN.z);
+
+    for (const it of lay.items) {
+      const c = it.color ?? '#8b5a2b';
+      const rot = it.rot ?? 0;
+      switch (it.type) {
+        case 'wall':
+          box(it.w, it.h, it.d, walls, it.x, it.h / 2, it.z);
+          break;
+        case 'bed':
+          box(it.w, 0.45, it.d, mat('#5b3a1e'), it.x, 0.22, it.z, rot);
+          box(it.w - 0.1, 0.25, it.d - 0.3, mat(c, 0.9), it.x, 0.55, it.z + 0.1, rot);
+          box(it.w - 0.4, 0.18, 0.5, mat('#f8fafc', 0.9), it.x, 0.72, it.z - it.d / 2 + 0.4, rot);
+          box(it.w, 1, 0.12, mat('#5b3a1e'), it.x, 0.5, it.z - it.d / 2, rot);
+          break;
+        case 'sofa': {
+          const s = new THREE.Group();
+          s.position.set(it.x, 0, it.z);
+          s.rotation.y = rot;
+          box(it.w, 0.45, it.d, mat(c, 0.9), 0, 0.25, 0, 0, s);
+          box(it.w, 0.55, 0.25, mat(c, 0.9), 0, 0.7, -it.d / 2 + 0.12, 0, s);
+          for (const sx of [-1, 1]) box(0.22, 0.6, it.d, mat(c, 0.9), sx * (it.w / 2 - 0.11), 0.45, 0, 0, s);
+          g.add(s);
+          break;
+        }
+        case 'table':
+          box(it.w, 0.06, it.d, mat('#7c4a1e', 0.5), it.x, it.low ? 0.45 : 0.75, it.z);
+          for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) box(0.06, it.low ? 0.45 : 0.75, 0.06, mat('#3f2a14'), it.x + sx * (it.w / 2 - 0.08), it.low ? 0.22 : 0.37, it.z + sz * (it.d / 2 - 0.08));
+          break;
+        case 'tv': {
+          box(it.w, 0.5, 0.4, mat('#3f2a14'), it.x, 0.25, it.z);
+          const screen = box(it.w, it.w * 0.56, 0.06, mat('#0b0b0b', 0.2, { emissive: '#2563eb', emissiveIntensity: 0 }), it.x, 1.5, it.z);
+          screen.userData.tv = true;
+          break;
+        }
+        case 'rug':
+          box(it.w, 0.02, it.d, mat('#9f1239', 1), it.x, 0.01, it.z).castShadow = false;
+          break;
+        case 'counter':
+          box(it.w, 0.9, it.d, mat('#e5e7eb', 0.4), it.x, 0.45, it.z);
+          box(it.w + 0.05, 0.05, it.d + 0.05, mat('#1f2937', 0.2), it.x, 0.92, it.z);
+          break;
+        case 'fridge':
+          box(it.w, 1.9, it.d, mat('#e2e8f0', 0.3, { metalness: 0.5 }), it.x, 0.95, it.z);
+          break;
+        case 'wardrobe':
+          box(it.w, 2.1, it.d, mat('#6b3f1f'), it.x, 1.05, it.z);
+          break;
+        case 'shower':
+          box(it.w, 0.1, it.d, mat('#f8fafc'), it.x, 0.05, it.z);
+          box(it.w, 2, 0.05, new THREE.MeshPhysicalMaterial({ color: '#bae6fd', transparent: true, opacity: 0.35, roughness: 0.05 }), it.x, 1, it.z + it.d / 2);
+          break;
+        case 'plant':
+          box(it.w * 0.7, 0.5, it.d * 0.7, mat('#9a3412'), it.x, 0.25, it.z);
+          {
+            const leaves = new THREE.Mesh(new THREE.IcosahedronGeometry(it.w * 0.7, 1), mat('#15803d', 0.9, { flatShading: true }));
+            leaves.position.set(it.x, 1.05, it.z);
+            g.add(leaves);
+          }
+          break;
+        case 'lamp':
+          box(0.06, 1.6, 0.06, mat('#1f2937'), it.x, 0.8, it.z);
+          box(0.45, 0.35, 0.45, ceilMat, it.x, 1.7, it.z);
+          break;
+        case 'piano':
+          box(it.w, 1, it.d, mat('#0a0a0a', 0.15, { metalness: 0.3 }), it.x, 0.5, it.z);
+          box(it.w, 0.05, 0.3, mat('#f8fafc'), it.x, 0.78, it.z + it.d / 2 - 0.1);
+          break;
+        case 'aquarium':
+          box(it.w, 0.7, it.d, mat('#1f2937'), it.x, 0.35, it.z);
+          box(it.w, 0.9, it.d, new THREE.MeshPhysicalMaterial({ color: '#38bdf8', transparent: true, opacity: 0.55, emissive: '#0ea5e9', emissiveIntensity: 0.4 }), it.x, 1.15, it.z);
+          break;
+        case 'bar':
+          box(it.w, 1.1, it.d, mat('#292524', 0.4), it.x, 0.55, it.z);
+          box(it.w + 0.1, 0.05, it.d + 0.1, mat('#e7e5e4', 0.2), it.x, 1.12, it.z);
+          break;
+        case 'workbench':
+          box(it.w, 0.9, it.d, mat('#78350f'), it.x, 0.45, it.z);
+          box(it.w, 1.2, 0.05, mat('#9ca3af'), it.x, 1.6, it.z - it.d / 2 + 0.03); // panneau à outils
+          for (let i = 0; i < 5; i++) box(0.08, 0.4, 0.06, mat('#dc2626'), it.x - it.w / 2 + 0.4 + i * 0.55, 1.6, it.z - it.d / 2 + 0.08);
+          break;
+        case 'shelf':
+          for (let k = 0; k < 4; k++) box(it.w, 0.05, it.d, mat('#475569'), it.x, 0.4 + k * 0.55, it.z);
+          box(it.w * 0.3, 0.3, it.d * 0.6, mat('#f59e0b'), it.x - it.w * 0.2, 0.6, it.z);
+          break;
+        case 'tires':
+          for (let k = 0; k < 3; k++) {
+            const t = new THREE.Mesh(new THREE.TorusGeometry(0.35, 0.14, 8, 16).rotateX(Math.PI / 2), mat('#111111', 0.9));
+            t.position.set(it.x, 0.14 + k * 0.28, it.z);
+            g.add(t);
+          }
+          break;
+        default:
+          box(it.w, 1, it.d, mat(c), it.x, 0.5, it.z);
+      }
+    }
+    // Véhicules garés (garage)
+    cars.forEach((c, i) => {
+      if (!c || !lay.slots[i]) return;
+      const car = createCar(c.model, c.color);
+      car.position.set(lay.slots[i].x, 0, lay.slots[i].z);
+      g.add(car);
+    });
+    this.scene.add(g);
+    this.interior = { group: g, layout: lay, ceilMat, kind };
+    this.setInteriorDevices(devices);
+    return lay;
+  }
+
+  setInteriorDevices(devices) {
+    const I = this.interior;
+    if (!I) return;
+    const on = !!devices.lights;
+    I.ceilMat.emissiveIntensity = on ? 2.2 : 0;
+    this.interiorLight.intensity = on ? 22 : 3;
+    this.interiorLight2.intensity = on ? 22 : 3;
+    I.group.traverse((o) => o.userData?.tv && (o.material.emissiveIntensity = devices.music ? 0.9 : 0));
+    I.music = !!devices.music;
+  }
+
+  clearInterior() {
+    const I = this.interior;
+    if (!I) return;
+    this.scene.remove(I.group);
+    for (const c of I.group.children.filter((o) => o.userData?.vehicle)) {
+      I.group.remove(c);
+      disposeCar(c);
+    }
+    I.group.traverse((o) => {
+      if (!o.isMesh) return;
+      o.geometry?.dispose();
+      o.material?.dispose?.();
+    });
+    this.interior = null;
+    this.interiorLight.intensity = 0;
+    this.interiorLight2.intensity = 0;
   }
 
   /** Construit les 14 maisons du quartier (une fois par pays). */
@@ -796,6 +1150,7 @@ export class World {
     const night = 1 - day;
     for (const m of this.nightMaterials) m.emissiveIntensity = night * 1.4;
     if (this.lampMat) this.lampMat.emissiveIntensity = night * 3;
+    if (this.glowMat) this.glowMat.opacity = Math.max(0, night - 0.3) * 1.2;
     this.night = night > 0.5;
     setLights(this.night);
 
@@ -816,15 +1171,60 @@ export class World {
     this.sun.target.position.copy(focus);
     this.stars.position.copy(focus);
 
+    this.updateTrafficLights();
     for (const t of this.traffic) {
-      t.t += t.speed * t.dir * dt;
+      // Arrêt au feu rouge / orange avant la ligne d'arrêt du prochain carrefour
+      const axis = t.alongX ? 'ew' : 'ns';
+      const lightOk = lightState(axis) === 'green';
+      let blocked = false;
+      if (!lightOk) {
+        for (const c of ROAD_LINES.slice(1, -1)) {
+          const stop = c - t.dir * STOP_OFFSET;
+          const ahead = (stop - t.t) * t.dir;
+          if (ahead > 0 && ahead < 2.5) blocked = true;
+        }
+      }
+      // Distance de sécurité avec la voiture devant
+      for (const o of this.traffic) {
+        if (o === t || o.alongX !== t.alongX || o.line !== t.line || o.dir !== t.dir) continue;
+        const gap = (o.t - t.t) * t.dir;
+        if (gap > 0 && gap < 8) blocked = true;
+      }
+      t.v = THREE.MathUtils.lerp(t.v ?? t.speed, blocked ? 0 : t.speed, Math.min(1, dt * (blocked ? 6 : 1.5)));
+      t.t += t.v * t.dir * dt;
       if (t.t > 190) t.t = -190;
       if (t.t < -190) t.t = 190;
       const lane = 2.5 * t.dir;
       if (t.alongX) t.car.position.set(t.t, 0, t.line + lane);
       else t.car.position.set(t.line - lane, 0, t.t);
       t.car.rotation.y = t.alongX ? (t.dir > 0 ? Math.PI / 2 : -Math.PI / 2) : t.dir > 0 ? 0 : Math.PI;
-      spinWheels(t.car, t.speed * dt);
+      spinWheels(t.car, t.v * dt);
+    }
+
+    // Nationale : les véhicules marquent l'arrêt au péage, la barrière se lève
+    for (const h of this.highwayTraffic ?? []) {
+      const before = (h.z - TOLL.z) * h.dir < 0; // pas encore passé la ligne
+      const dist = Math.abs(h.z - (TOLL.z - h.dir * 3));
+      if (before && !h.paid && dist < 0.8) {
+        h.wait += dt;
+        if (h.wait > 1.6) h.paid = true;
+      } else {
+        const slow = before && !h.paid && dist < 12 ? Math.max(0.15, dist / 12) : 1;
+        h.z += h.speed * slow * h.dir * dt;
+      }
+      if (h.z < HIGHWAY.fromZ + 5 || h.z > HIGHWAY.toZ - 2) {
+        h.z = h.dir < 0 ? HIGHWAY.toZ - 3 : HIGHWAY.fromZ + 6;
+        h.paid = false;
+        h.wait = 0;
+      }
+      h.car.position.set(h.lane, 0, h.z);
+      h.car.rotation.y = h.dir > 0 ? 0 : Math.PI;
+      spinWheels(h.car, h.speed * dt);
+    }
+    for (const b of this.barriers ?? []) {
+      const near = [...(this.highwayTraffic ?? []).filter((h) => h.paid || h.wait > 1.2).map((h) => h.car.position), ...(this.tollVehicles ?? [])].some((p) => Math.abs(p.x - b.lane) < 3 && Math.abs(p.z - TOLL.z) < 7);
+      b.open = THREE.MathUtils.lerp(b.open, near ? 1 : 0, Math.min(1, dt * 4));
+      b.pivot.rotation.z = b.open * 1.35;
     }
 
     for (const hs of this.houses?.values() ?? []) {

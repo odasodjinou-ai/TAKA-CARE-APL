@@ -3,32 +3,26 @@
 // ce qui garantit qu'ils partagent exactement la même géographie.
 import { COUNTRY_BY_CODE } from './countries.js';
 import { LOTS, RESIDENTIAL } from './houses.js';
+import { RIVER, BRIDGE, HIGHWAY, TOLL, APARTMENTS } from './city.js';
 
-export const WORLD = Object.freeze({
-  bound: 420, // zone jouable : |x|,|z| <= bound
-  roadStart: -180,
-  roadStep: 60,
-  roadCount: 7, // routes en x et z : -180..180
-  roadWidth: 10,
-  sidewalk: 3,
-});
-
-export const ROAD_LINES = Array.from({ length: WORLD.roadCount }, (_, i) => WORLD.roadStart + i * WORLD.roadStep);
+import { WORLD, ROAD_LINES } from './roadlines.js';
+export { WORLD, ROAD_LINES };
 
 /** Lieux d'intérêt fixes (points d'interaction « E »). */
 export const PLACES = Object.freeze({
   jobs: { id: 'jobs', label: 'Agence pour l\'emploi', sign: 'EMPLOIS', block: [-30, -30], door: { x: -9, z: -30 }, color: '#2563eb' },
   shop: { id: 'shop', label: 'Boutique de mode', sign: 'BOUTIQUE', block: [30, -30], door: { x: 9, z: -30 }, color: '#db2777' },
   cars: { id: 'cars', label: 'Concessionnaire', sign: 'AUTOS', block: [-30, 30], door: { x: -9, z: 30 }, color: '#f59e0b' },
+  apartments: { id: 'apartments', label: 'Résidence d\'appartements', sign: 'RÉSIDENCES', block: APARTMENTS.block, door: APARTMENTS.door, color: '#7c3aed' },
   airport: { id: 'airport', label: 'Comptoir de l\'aéroport', sign: 'AÉROPORT', door: { x: 252, z: 0 }, color: '#0ea5e9' },
 });
 
 export const INTERACT_RADIUS = 6;
 export const AIRPORT = Object.freeze({
   terminal: { x: 272, z: 0, w: 30, d: 80, h: 14 },
-  runway: { x: 345, z: 0, w: 40, d: 640 },
+  runway: { x: 345, z: 0, w: 40, d: 500 },
   arrival: { x: 246, z: 8 },
-  plane: { x: 345, z: 270 },
+  plane: { x: 345, z: 205 },
 });
 
 // --- Aléatoire déterministe -------------------------------------------------
@@ -95,6 +89,12 @@ export function makeHeightFn(seed, biome) {
   const flat = WORLD.bound + 20;
   return (x, z) => {
     const d = Math.max(Math.abs(x), Math.abs(z));
+    // Lit du fleuve (traverse toute la carte d'ouest en est)
+    const rz = Math.abs(z - RIVER.z);
+    if (rz < RIVER.w / 2 + 4) {
+      const bed = -3.2 * (1 - Math.min(1, Math.max(0, (rz - (RIVER.w / 2 - 3)) / 7)));
+      if (d <= flat) return bed;
+    }
     if (d <= flat) return 0;
     const t = Math.min(1, (d - flat) / 260);
     const n = noise(x / 90, z / 90) * 0.65 + noise(x / 30, z / 30) * 0.35;
@@ -116,6 +116,9 @@ export function onRoad(x, z, margin = 0) {
   if (Math.abs(z) <= half && x >= 180 && x <= 260) return true;
   // Avenue du quartier résidentiel
   if (Math.abs(z) <= half && x >= RESIDENTIAL.fromX && x <= RESIDENTIAL.toX) return true;
+  // Nationale (vers le nord), pont et plateforme de péage
+  if (Math.abs(x - HIGHWAY.x) <= HIGHWAY.w / 2 + margin && z >= HIGHWAY.fromZ && z <= HIGHWAY.toZ) return true;
+  if (Math.abs(x - HIGHWAY.x) <= TOLL.w / 2 + margin && Math.abs(z - TOLL.z) <= TOLL.len / 2) return true;
   return false;
 }
 
@@ -156,7 +159,7 @@ export function getLayout(code) {
       const key = `${bx},${bz}`;
       const special = specialBlocks.get(key);
       if (special) {
-        addBox({ x: bx, z: bz, w: 34, d: 34, h: 11, color: '#f8fafc', kind: 'special', place: special.id });
+        addBox({ x: bx, z: bz, w: 34, d: 34, h: special.id === 'apartments' ? 19 : 11, color: '#f8fafc', kind: 'special', place: special.id });
         continue;
       }
       const distCenter = Math.hypot(bx, bz);
@@ -194,6 +197,12 @@ export function getLayout(code) {
   addBox({ x: t.x, z: t.z, w: t.w, d: t.d, h: t.h, color: '#e2e8f0', kind: 'terminal' });
   // Hangars
   for (const hz of [-110, 110]) addBox({ x: 280, z: hz, w: 26, d: 40, h: 12, color: '#94a3b8', kind: 'hangar' });
+  // Fleuve : infranchissable, sauf par le pont
+  const outer = WORLD.bound + 40;
+  colliders.push({ minX: -outer, maxX: BRIDGE.x - BRIDGE.w / 2, minZ: RIVER.z - RIVER.w / 2, maxZ: RIVER.z + RIVER.w / 2 });
+  colliders.push({ minX: BRIDGE.x + BRIDGE.w / 2, maxX: outer, minZ: RIVER.z - RIVER.w / 2, maxZ: RIVER.z + RIVER.w / 2 });
+  // Cabines de péage
+  for (const bx of TOLL.booths) colliders.push({ minX: bx - 0.8, maxX: bx + 0.8, minZ: TOLL.z - 1.6, maxZ: TOLL.z + 1.6 });
   // Maisons du quartier résidentiel (toujours construites ; à vendre tant qu'aucune famille ne les achète)
   for (const lot of LOTS) {
     const h = lot.house;
@@ -208,7 +217,9 @@ export function getLayout(code) {
     onRoad(x, z, pad) ||
     colliders.some((c) => x > c.minX - pad && x < c.maxX + pad && z > c.minZ - pad && z < c.maxZ + pad) ||
     (x > 230 && x < 380 && Math.abs(z) < 330) ||
-    (x > RESIDENTIAL.fromX - 6 && x < RESIDENTIAL.toX && Math.abs(z) < RESIDENTIAL.roadHalf + RESIDENTIAL.lotD + 4);
+    (x > RESIDENTIAL.fromX - 6 && x < RESIDENTIAL.toX && Math.abs(z) < RESIDENTIAL.roadHalf + RESIDENTIAL.lotD + 4) ||
+    Math.abs(z - RIVER.z) < RIVER.w / 2 + 6 ||
+    (Math.abs(x - HIGHWAY.x) < TOLL.w / 2 + 6 && z < -180);
   for (const p of parks) {
     const n = 10 + Math.floor(rand() * 8);
     for (let i = 0; i < n; i++) {
@@ -279,8 +290,11 @@ export function resolveCollisions(pos, radius, colliders) {
       pos.z += sz * (dist + radius);
     }
   }
-  pos.x = Math.max(-WORLD.bound, Math.min(WORLD.bound, pos.x));
-  pos.z = Math.max(-WORLD.bound, Math.min(WORLD.bound, pos.z));
+  // Limites de la carte (sauf dans les intérieurs, placés loin de la carte : x ≈ 5000)
+  if (Math.abs(pos.x) < 2000) {
+    pos.x = Math.max(-WORLD.bound, Math.min(WORLD.bound, pos.x));
+    pos.z = Math.max(-WORLD.bound, Math.min(WORLD.bound, pos.z));
+  }
   return pos;
 }
 
