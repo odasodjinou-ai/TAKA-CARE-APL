@@ -1164,7 +1164,7 @@ PANELS.apartments = (game) => {
           'div',
           { class: `pack ${a.free ? '' : 'sel'}`, style: a.free ? '' : 'opacity:0.55;cursor:default' },
           h('div', { class: 'v' }, `n°${a.unit}`),
-          h('div', { class: 'meta' }, `${Math.floor(a.unit / 100)}ᵉ étage`),
+          h('div', { class: 'meta' }, Math.floor(a.unit / 100) === 1 ? '1er étage' : `${Math.floor(a.unit / 100)}e étage`),
           a.free
             ? h('button', { class: 'btn primary', style: 'margin-top:6px', disabled: p.money < APARTMENTS.rent, onclick: () => confirm(`Louer l'appartement n°${a.unit} pour ${formatMoney(APARTMENTS.rent)} (7 jours) ?`) && game.net.send('aptRent', { unit: a.unit }) }, 'Louer')
             : h('div', { class: 'meta' }, `Occupé · ${a.renter}`),
