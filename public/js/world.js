@@ -614,7 +614,7 @@ export class World {
     }
     const poleGeo = mergeGeometries([new THREE.CylinderGeometry(0.09, 0.11, 3.2, 6).translate(0, 1.6, 0), new THREE.BoxGeometry(0.42, 1.15, 0.3).translate(0, 3.6, 0)]);
     const poleMesh = new THREE.InstancedMesh(poleGeo, new THREE.MeshStandardMaterial({ color: '#1f2937', roughness: 0.6 }), poles.length);
-    const lamps = new THREE.InstancedMesh(new THREE.SphereGeometry(0.12, 10, 8), new THREE.MeshBasicMaterial({ toneMapped: false }), poles.length * 3);
+    const lamps = new THREE.InstancedMesh(new THREE.SphereGeometry(0.15, 12, 8), new THREE.MeshBasicMaterial({ toneMapped: false }), poles.length * 3);
     const dummy = new THREE.Object3D();
     poles.forEach(([x, z, ry], i) => {
       dummy.position.set(x, 0, z);
