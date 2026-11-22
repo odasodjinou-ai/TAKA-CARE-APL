@@ -610,6 +610,13 @@ function updateCamera(dt) {
     target.z + Math.cos(cam.yaw) * Math.cos(cam.pitch) * dist,
   );
   want.y = Math.max(want.y, 0.6);
+  if (game.inside) {
+    // À l'intérieur, la caméra reste dans la pièce (sinon elle filme à travers les murs)
+    const b = interiorLayout(game.inside.layout).bounds;
+    want.x = THREE.MathUtils.clamp(want.x, b.minX + 0.35, b.maxX - 0.35);
+    want.z = THREE.MathUtils.clamp(want.z, b.minZ + 0.35, b.maxZ - 0.35);
+    want.y = Math.min(want.y, (game.inside.layout === 'garage' ? 3.4 : 3) - 0.25);
+  }
   camera.position.lerp(want, Math.min(1, dt * 10));
   camera.lookAt(target);
 }
