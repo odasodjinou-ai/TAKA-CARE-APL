@@ -5,7 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
     <title>Terra Vida</title>
     <meta name="description" content="Jeu de vie en monde ouvert multijoueur : voyage dans tous les pays, travaille, fonde une famille." />
-    <link rel="stylesheet" href="/css/style.css" />
+    <link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#0f1613">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Terra Vida">
+<link rel="stylesheet" href="/css/style.css" />
     <script type="importmap">
       {
         "imports": {
@@ -116,5 +121,6 @@
     <div id="connection" class="hidden">Connexion perdue — reconnexion…</div>
 
     <script type="module" src="/js/main.js"></script>
-  </body>
+  <script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});</script>
+</body>
 </html>

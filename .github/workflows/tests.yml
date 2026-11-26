@@ -1,0 +1,31 @@
+# Lance les tests du serveur à chaque envoi et à chaque pull request.
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      # Vérifie que le serveur démarre et répond (site, jeu, état)
+      - name: Démarrage du serveur
+        run: |
+          PORT=3000 node server/index.js &
+          for i in $(seq 1 20); do curl -fs localhost:3000/healthz && break; sleep 0.5; done
+          curl -fs localhost:3000/ > /dev/null
+          curl -fs localhost:3000/jouer/ > /dev/null
+          curl -fs localhost:3000/api/status

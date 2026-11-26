@@ -1,0 +1,17 @@
+{
+  "name": "Terra Vida",
+  "short_name": "Terra Vida",
+  "description": "Jeu de vie multijoueur : 197 pays, métiers, maisons, véhicules et familles.",
+  "lang": "fr",
+  "start_url": "/jouer/",
+  "scope": "/",
+  "display": "fullscreen",
+  "orientation": "any",
+  "background_color": "#0f1613",
+  "theme_color": "#0f1613",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

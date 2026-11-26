@@ -43,6 +43,7 @@ const MIME = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.webp': 'image/webp',
+  '.webmanifest': 'application/manifest+json',
   '.txt': 'text/plain; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.ico': 'image/x-icon',

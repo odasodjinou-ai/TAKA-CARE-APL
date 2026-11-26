@@ -229,7 +229,9 @@ function nearestPlace() {
     }
     lay.slots.forEach((sp, i) => {
       const car = game.insideCars?.[i];
-      const dd = car ? near(sp.x, sp.z, 3) : null;
+      // Autour d'une voiture de 4,5 m ; priorité sur la porte (la place du milieu fait face à la sortie)
+      const dc = car ? Math.hypot(me.pos.x - sp.x, me.pos.z - sp.z) : Infinity;
+      const dd = dc <= 3.4 && (!best || dc - 2 < best.d) ? dc - 2 : null;
       if (dd !== null) best = { d: dd, p: { id: 'takecar', slot: i, label: `Sortir ce véhicule (${VEHICLE_BY_ID.get(car.model)?.name ?? car.model})` } };
     });
     return best?.p ?? null;
